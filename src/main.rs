@@ -92,10 +92,12 @@ async fn track_path(sqlite: &SqlitePool, repo: &Utf8Path, path: &Utf8Path) -> an
     let repo = repo.as_str();
     let path = path.as_str();
 
+    let mut transaction = sqlite.begin().await?;
+
     let count = sqlx::query_scalar("select count from paths where repo = $1 and path = $2")
         .bind(repo)
         .bind(path)
-        .fetch_optional(sqlite)
+        .fetch_optional(&mut *transaction)
         .await?
         .unwrap_or(0);
 
@@ -103,8 +105,10 @@ async fn track_path(sqlite: &SqlitePool, repo: &Utf8Path, path: &Utf8Path) -> an
         .bind(repo)
         .bind(path)
         .bind(count + 1)
-        .execute(sqlite)
+        .execute(&mut *transaction)
         .await?;
+
+    transaction.commit().await?;
 
     Ok(())
 }
