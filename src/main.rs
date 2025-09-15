@@ -49,10 +49,6 @@ async fn main() -> anyhow::Result<()> {
     for path in &args.paths {
         let path = path.canonicalize_utf8()?;
 
-        if !path.starts_with(&repo) {
-            continue;
-        }
-
         log_path(&sqlite, &repo, &path).await?;
     }
 
