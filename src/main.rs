@@ -8,6 +8,10 @@ use sqlx::{
 use std::str::FromStr as _;
 use tokio::{fs, process::Command};
 
+// TODO: Track individual path accesses as rows in the database, so timestamps can be associated
+// with them, and more interesting statistics get unlocked. Currently I can do frequency, but not
+// recency, or frecency.
+
 #[derive(clap::Parser, Debug)]
 struct Args {
     #[arg(value_name = "PATH")]
