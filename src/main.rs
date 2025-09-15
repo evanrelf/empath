@@ -2,11 +2,12 @@ use camino::{Utf8Path, Utf8PathBuf};
 use clap::Parser as _;
 use etcetera::app_strategy::{AppStrategy as _, AppStrategyArgs, Xdg};
 use jiff::Timestamp;
+use pathdiff::diff_utf8_paths;
 use sqlx::{
     SqlitePool,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
-use std::str::FromStr as _;
+use std::{env, str::FromStr as _};
 use tokio::{fs, process};
 
 #[derive(clap::Parser, Debug)]
@@ -15,6 +16,11 @@ struct Args {
     /// Use specified Git repo instead of inferring from working directory
     #[arg(long)]
     repo: Option<Utf8PathBuf>,
+
+    /// Print absolute paths
+    #[arg(long)]
+    absolute: bool,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -26,8 +32,10 @@ enum Command {
         #[arg(value_name = "PATH")]
         paths: Vec<Utf8PathBuf>,
     },
+
     /// Print most recently used paths
     Mru,
+
     /// Print most frequently used paths
     Mfu,
 }
@@ -61,6 +69,8 @@ async fn main() -> anyhow::Result<()> {
 
     sqlite_init(&sqlite).await?;
 
+    let current_dir = Utf8PathBuf::try_from(env::current_dir()?)?;
+
     let repo = match args.repo {
         Some(repo) => repo,
         None => repo().await?,
@@ -75,11 +85,21 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Mru => {
             for path in mru(&sqlite, &repo).await? {
+                let path = if args.absolute {
+                    path
+                } else {
+                    diff_utf8_paths(&path, &current_dir).unwrap()
+                };
                 println!("{path}");
             }
         }
         Command::Mfu => {
             for path in mfu(&sqlite, &repo).await? {
+                let path = if args.absolute {
+                    path
+                } else {
+                    diff_utf8_paths(&path, &current_dir).unwrap()
+                };
                 println!("{path}");
             }
         }
