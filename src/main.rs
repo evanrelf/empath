@@ -18,10 +18,15 @@ struct Args {
 
 #[derive(clap::Subcommand, Debug)]
 enum Command {
+    /// Record path access
     Log {
         #[arg(value_name = "PATH")]
         paths: Vec<Utf8PathBuf>,
     },
+    /// Most recently used
+    Mru,
+    /// Most frequently used
+    Mfu,
 }
 
 #[tokio::main]
@@ -59,8 +64,17 @@ async fn main() -> anyhow::Result<()> {
         Command::Log { paths } => {
             for path in &paths {
                 let path = path.canonicalize_utf8()?;
-
                 log_path(&sqlite, &repo, &path).await?;
+            }
+        }
+        Command::Mru => {
+            for path in mru(&sqlite, &repo).await? {
+                println!("{path}");
+            }
+        }
+        Command::Mfu => {
+            for path in mfu(&sqlite, &repo).await? {
+                println!("{path}");
             }
         }
     }
@@ -111,4 +125,52 @@ async fn log_path(sqlite: &SqlitePool, repo: &Utf8Path, path: &Utf8Path) -> anyh
         .await?;
 
     Ok(())
+}
+
+async fn mru(sqlite: &SqlitePool, repo: &Utf8Path) -> anyhow::Result<Vec<Utf8PathBuf>> {
+    let repo = repo.as_str();
+
+    let rows: Vec<String> = sqlx::query_scalar(
+        "
+        select path
+        from log
+        where repo = $1
+        group by path
+        order by max(at) desc
+        ",
+    )
+    .bind(repo)
+    .fetch_all(sqlite)
+    .await?;
+
+    let paths = rows
+        .into_iter()
+        .map(|string| Utf8PathBuf::from(string))
+        .collect();
+
+    Ok(paths)
+}
+
+async fn mfu(sqlite: &SqlitePool, repo: &Utf8Path) -> anyhow::Result<Vec<Utf8PathBuf>> {
+    let repo = repo.as_str();
+
+    let rows: Vec<String> = sqlx::query_scalar(
+        "
+        select path
+        from log
+        where repo = $1
+        group by path
+        order by count(*) desc
+        ",
+    )
+    .bind(repo)
+    .fetch_all(sqlite)
+    .await?;
+
+    let paths = rows
+        .into_iter()
+        .map(|string| Utf8PathBuf::from(string))
+        .collect();
+
+    Ok(paths)
 }
