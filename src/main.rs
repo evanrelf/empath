@@ -24,7 +24,7 @@ struct Args {
 #[derive(clap::Subcommand, Debug)]
 enum Command {
     /// Record path access
-    Log {
+    Record {
         #[arg(value_name = "PATH", required = true)]
         paths: Vec<Utf8PathBuf>,
     },
@@ -87,10 +87,10 @@ async fn main() -> anyhow::Result<()> {
     };
 
     match args.command {
-        Command::Log { paths } => {
+        Command::Record { paths } => {
             for path in &paths {
                 let path = absolute_utf8(path)?;
-                log(&sqlite, &repo, &path).await?;
+                record(&sqlite, &repo, &path).await?;
             }
         }
         Command::Forget { paths } => {
@@ -127,7 +127,7 @@ async fn main() -> anyhow::Result<()> {
 async fn sqlite_init(sqlite: &SqlitePool) -> anyhow::Result<()> {
     sqlx::query(
         "
-        create table if not exists log (
+        create table if not exists empath (
             repo text not null,
             path text not null,
             at text not null,
@@ -153,13 +153,13 @@ async fn repo() -> anyhow::Result<Utf8PathBuf> {
     Ok(repo)
 }
 
-async fn log(sqlite: &SqlitePool, repo: &Utf8Path, path: &Utf8Path) -> anyhow::Result<()> {
+async fn record(sqlite: &SqlitePool, repo: &Utf8Path, path: &Utf8Path) -> anyhow::Result<()> {
     let repo = repo.as_str();
     let path = path.as_str();
 
     let now = Timestamp::now().to_string();
 
-    sqlx::query("insert into log (repo, path, at) values ($1, $2, $3)")
+    sqlx::query("insert into empath (repo, path, at) values ($1, $2, $3)")
         .bind(repo)
         .bind(path)
         .bind(now)
@@ -173,7 +173,7 @@ async fn forget(sqlite: &SqlitePool, repo: &Utf8Path, path: &Utf8Path) -> anyhow
     let repo = repo.as_str();
     let path = path.as_str();
 
-    sqlx::query("delete from log where repo = $1 and path = $2")
+    sqlx::query("delete from empath where repo = $1 and path = $2")
         .bind(repo)
         .bind(path)
         .execute(sqlite)
@@ -188,7 +188,7 @@ async fn mru(sqlite: &SqlitePool, repo: &Utf8Path) -> anyhow::Result<Vec<Utf8Pat
     let rows: Vec<String> = sqlx::query_scalar(
         "
         select path
-        from log
+        from empath
         where repo = $1
         group by path
         order by max(at) desc
@@ -212,7 +212,7 @@ async fn mfu(sqlite: &SqlitePool, repo: &Utf8Path) -> anyhow::Result<Vec<Utf8Pat
     let rows: Vec<String> = sqlx::query_scalar(
         "
         select path
-        from log
+        from empath
         where repo = $1
         group by path
         order by count(*) desc
