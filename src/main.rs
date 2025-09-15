@@ -1,16 +1,13 @@
 use camino::{Utf8Path, Utf8PathBuf};
 use clap::Parser as _;
 use etcetera::app_strategy::{AppStrategy as _, AppStrategyArgs, Xdg};
+use jiff::Timestamp;
 use sqlx::{
     SqlitePool,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
 use std::str::FromStr as _;
 use tokio::{fs, process::Command};
-
-// TODO: Track individual path accesses as rows in the database, so timestamps can be associated
-// with them, and more interesting statistics get unlocked. Currently I can do frequency, but not
-// recency, or frecency.
 
 #[derive(clap::Parser, Debug)]
 struct Args {
@@ -56,7 +53,7 @@ async fn main() -> anyhow::Result<()> {
             continue;
         }
 
-        track_path(&sqlite, &repo, &path).await?;
+        log_path(&sqlite, &repo, &path).await?;
     }
 
     Ok(())
@@ -65,11 +62,11 @@ async fn main() -> anyhow::Result<()> {
 async fn sqlite_init(sqlite: &SqlitePool) -> anyhow::Result<()> {
     sqlx::query(
         "
-        create table if not exists paths (
+        create table if not exists log (
             repo text not null,
             path text not null,
-            count int not null,
-            unique (repo, path)
+            at text not null,
+            unique (repo, path, at)
         ) strict;
         ",
     )
@@ -91,27 +88,18 @@ async fn repo() -> anyhow::Result<Utf8PathBuf> {
     Ok(repo)
 }
 
-async fn track_path(sqlite: &SqlitePool, repo: &Utf8Path, path: &Utf8Path) -> anyhow::Result<()> {
+async fn log_path(sqlite: &SqlitePool, repo: &Utf8Path, path: &Utf8Path) -> anyhow::Result<()> {
     let repo = repo.as_str();
     let path = path.as_str();
 
-    let mut transaction = sqlite.begin().await?;
+    let now = Timestamp::now().to_string();
 
-    let count = sqlx::query_scalar("select count from paths where repo = $1 and path = $2")
+    sqlx::query("insert into log (repo, path, at) values ($1, $2, $3)")
         .bind(repo)
         .bind(path)
-        .fetch_optional(&mut *transaction)
-        .await?
-        .unwrap_or(0);
-
-    sqlx::query("insert or replace into paths (repo, path, count) values ($1, $2, $3)")
-        .bind(repo)
-        .bind(path)
-        .bind(count + 1)
-        .execute(&mut *transaction)
+        .bind(now)
+        .execute(sqlite)
         .await?;
-
-    transaction.commit().await?;
 
     Ok(())
 }
