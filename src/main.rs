@@ -12,6 +12,9 @@ use tokio::{fs, process};
 #[derive(clap::Parser, Debug)]
 #[command(disable_help_subcommand = true)]
 struct Args {
+    /// Use specified Git repo instead of inferring from working directory
+    #[arg(long)]
+    repo: Option<Utf8PathBuf>,
     #[command(subcommand)]
     command: Command,
 }
@@ -23,9 +26,9 @@ enum Command {
         #[arg(value_name = "PATH")]
         paths: Vec<Utf8PathBuf>,
     },
-    /// Most recently used
+    /// Print most recently used paths
     Mru,
-    /// Most frequently used
+    /// Print most frequently used paths
     Mfu,
 }
 
@@ -58,7 +61,10 @@ async fn main() -> anyhow::Result<()> {
 
     sqlite_init(&sqlite).await?;
 
-    let repo = repo().await?;
+    let repo = match args.repo {
+        Some(repo) => repo,
+        None => repo().await?,
+    };
 
     match args.command {
         Command::Log { paths } => {
