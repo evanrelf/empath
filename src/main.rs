@@ -7,12 +7,21 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
 use std::str::FromStr as _;
-use tokio::{fs, process::Command};
+use tokio::{fs, process};
 
 #[derive(clap::Parser, Debug)]
+#[command(disable_help_subcommand = true)]
 struct Args {
-    #[arg(value_name = "PATH")]
-    paths: Vec<Utf8PathBuf>,
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum Command {
+    Log {
+        #[arg(value_name = "PATH")]
+        paths: Vec<Utf8PathBuf>,
+    },
 }
 
 #[tokio::main]
@@ -46,10 +55,14 @@ async fn main() -> anyhow::Result<()> {
 
     let repo = repo().await?;
 
-    for path in &args.paths {
-        let path = path.canonicalize_utf8()?;
+    match args.command {
+        Command::Log { paths } => {
+            for path in &paths {
+                let path = path.canonicalize_utf8()?;
 
-        log_path(&sqlite, &repo, &path).await?;
+                log_path(&sqlite, &repo, &path).await?;
+            }
+        }
     }
 
     Ok(())
@@ -73,7 +86,7 @@ async fn sqlite_init(sqlite: &SqlitePool) -> anyhow::Result<()> {
 }
 
 async fn repo() -> anyhow::Result<Utf8PathBuf> {
-    let output = Command::new("git")
+    let output = process::Command::new("git")
         .arg("rev-parse")
         .arg("--show-toplevel")
         .output()
