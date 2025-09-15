@@ -3,7 +3,7 @@ use clap::Parser as _;
 use etcetera::app_strategy::{AppStrategy as _, AppStrategyArgs, Xdg};
 use sqlx::{
     SqlitePool,
-    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
 use std::str::FromStr as _;
 use tokio::{fs, process::Command};
@@ -34,9 +34,10 @@ async fn main() -> anyhow::Result<()> {
 
     let sqlite = SqlitePoolOptions::new()
         .connect_with(
-            // TODO: Use WAL and stuff
             SqliteConnectOptions::from_str(&format!("sqlite://{sqlite_path}"))?
-                .create_if_missing(true),
+                .create_if_missing(true)
+                .journal_mode(SqliteJournalMode::Wal)
+                .synchronous(SqliteSynchronous::Normal),
         )
         .await?;
 
