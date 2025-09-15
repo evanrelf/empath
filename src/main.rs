@@ -17,10 +17,6 @@ struct Args {
     #[arg(long)]
     repo: Option<Utf8PathBuf>,
 
-    /// Print absolute paths
-    #[arg(long)]
-    absolute: bool,
-
     #[command(subcommand)]
     command: Command,
 }
@@ -34,10 +30,18 @@ enum Command {
     },
 
     /// Print most recently used paths
-    Mru,
+    Mru {
+        /// Print absolute paths
+        #[arg(long)]
+        absolute: bool,
+    },
 
     /// Print most frequently used paths
-    Mfu,
+    Mfu {
+        /// Print absolute paths
+        #[arg(long)]
+        absolute: bool,
+    },
 }
 
 #[tokio::main]
@@ -83,9 +87,9 @@ async fn main() -> anyhow::Result<()> {
                 log_path(&sqlite, &repo, &path).await?;
             }
         }
-        Command::Mru => {
+        Command::Mru { absolute } => {
             for path in mru(&sqlite, &repo).await? {
-                let path = if args.absolute {
+                let path = if absolute {
                     path
                 } else {
                     diff_utf8_paths(&path, &current_dir).unwrap()
@@ -93,9 +97,9 @@ async fn main() -> anyhow::Result<()> {
                 println!("{path}");
             }
         }
-        Command::Mfu => {
+        Command::Mfu { absolute } => {
             for path in mfu(&sqlite, &repo).await? {
-                let path = if args.absolute {
+                let path = if absolute {
                     path
                 } else {
                     diff_utf8_paths(&path, &current_dir).unwrap()
