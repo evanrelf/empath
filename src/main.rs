@@ -46,7 +46,6 @@ async fn main() -> anyhow::Result<()> {
     let repo = repo().await?;
 
     for path in &args.paths {
-        // TODO: This is blocking I/O
         let path = path.canonicalize_utf8()?;
 
         if !path.starts_with(&repo) {
