@@ -10,6 +10,8 @@ use sqlx::{
 use std::{env, str::FromStr as _};
 use tokio::{fs, process};
 
+// TODO: `canonicalize_utf8` sees through symlinks, which is bad. I just want absolute paths.
+
 #[derive(clap::Parser, Debug)]
 #[command(disable_help_subcommand = true)]
 struct Args {
@@ -25,7 +27,13 @@ struct Args {
 enum Command {
     /// Record path access
     Log {
-        #[arg(value_name = "PATH")]
+        #[arg(value_name = "PATH", required = true)]
+        paths: Vec<Utf8PathBuf>,
+    },
+
+    /// Forget paths
+    Forget {
+        #[arg(value_name = "PATH", required = true)]
         paths: Vec<Utf8PathBuf>,
     },
 
@@ -84,7 +92,13 @@ async fn main() -> anyhow::Result<()> {
         Command::Log { paths } => {
             for path in &paths {
                 let path = path.canonicalize_utf8()?;
-                log_path(&sqlite, &repo, &path).await?;
+                log(&sqlite, &repo, &path).await?;
+            }
+        }
+        Command::Forget { paths } => {
+            for path in &paths {
+                let path = path.canonicalize_utf8()?;
+                forget(&sqlite, &repo, &path).await?;
             }
         }
         Command::Mru { absolute } => {
@@ -141,7 +155,7 @@ async fn repo() -> anyhow::Result<Utf8PathBuf> {
     Ok(repo)
 }
 
-async fn log_path(sqlite: &SqlitePool, repo: &Utf8Path, path: &Utf8Path) -> anyhow::Result<()> {
+async fn log(sqlite: &SqlitePool, repo: &Utf8Path, path: &Utf8Path) -> anyhow::Result<()> {
     let repo = repo.as_str();
     let path = path.as_str();
 
@@ -151,6 +165,19 @@ async fn log_path(sqlite: &SqlitePool, repo: &Utf8Path, path: &Utf8Path) -> anyh
         .bind(repo)
         .bind(path)
         .bind(now)
+        .execute(sqlite)
+        .await?;
+
+    Ok(())
+}
+
+async fn forget(sqlite: &SqlitePool, repo: &Utf8Path, path: &Utf8Path) -> anyhow::Result<()> {
+    let repo = repo.as_str();
+    let path = path.as_str();
+
+    sqlx::query("delete from log where repo = $1 and path = $2")
+        .bind(repo)
+        .bind(path)
         .execute(sqlite)
         .await?;
 
