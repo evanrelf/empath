@@ -46,11 +46,14 @@ async fn main() -> anyhow::Result<()> {
     let repo = repo().await?;
 
     for path in &args.paths {
-        // TODO: `continue` if `path` is not in `repo`
+        // TODO: This is blocking I/O
+        let path = path.canonicalize_utf8()?;
 
-        // TODO: Make `path` absolute ("canonicalize")
+        if !path.starts_with(&repo) {
+            continue;
+        }
 
-        track_path(&sqlite, &repo, path).await?;
+        track_path(&sqlite, &repo, &path).await?;
     }
 
     Ok(())
