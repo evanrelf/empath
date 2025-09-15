@@ -1,4 +1,4 @@
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::{Utf8Path, Utf8PathBuf, absolute_utf8};
 use clap::Parser as _;
 use etcetera::app_strategy::{AppStrategy as _, AppStrategyArgs, Xdg};
 use jiff::Timestamp;
@@ -9,8 +9,6 @@ use sqlx::{
 };
 use std::{env, str::FromStr as _};
 use tokio::{fs, process};
-
-// TODO: `canonicalize_utf8` sees through symlinks, which is bad. I just want absolute paths.
 
 #[derive(clap::Parser, Debug)]
 #[command(disable_help_subcommand = true)]
@@ -91,13 +89,13 @@ async fn main() -> anyhow::Result<()> {
     match args.command {
         Command::Log { paths } => {
             for path in &paths {
-                let path = path.canonicalize_utf8()?;
+                let path = absolute_utf8(path)?;
                 log(&sqlite, &repo, &path).await?;
             }
         }
         Command::Forget { paths } => {
             for path in &paths {
-                let path = path.canonicalize_utf8()?;
+                let path = absolute_utf8(path)?;
                 forget(&sqlite, &repo, &path).await?;
             }
         }
