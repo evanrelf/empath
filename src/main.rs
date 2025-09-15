@@ -80,7 +80,7 @@ async fn repo() -> anyhow::Result<Utf8PathBuf> {
         .output()
         .await?;
 
-    let repo = Utf8PathBuf::from(str::from_utf8(&output.stdout)?);
+    let repo = Utf8PathBuf::from(str::from_utf8(&output.stdout)?.trim());
 
     Ok(repo)
 }
@@ -96,7 +96,7 @@ async fn track_path(sqlite: &SqlitePool, repo: &Utf8Path, path: &Utf8Path) -> an
         .await?
         .unwrap_or(0);
 
-    sqlx::query("insert into paths (repo, path, count) values ($1, $2, $3);")
+    sqlx::query("insert or replace into paths (repo, path, count) values ($1, $2, $3)")
         .bind(repo)
         .bind(path)
         .bind(count + 1)
