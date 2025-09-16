@@ -148,6 +148,10 @@ async fn repo() -> anyhow::Result<Utf8PathBuf> {
         .output()
         .await?;
 
+    if !output.status.success() {
+        anyhow::bail!("Failed to get Git repo");
+    }
+
     let repo = Utf8PathBuf::from(str::from_utf8(&output.stdout)?.trim());
 
     Ok(repo)
