@@ -136,8 +136,8 @@ async fn sqlite_init(sqlite: &SqlitePool) -> anyhow::Result<()> {
         create table if not exists empath (
             repo text not null,
             path text not null,
-            at text not null,
-            unique (repo, path, at)
+            time text not null,
+            unique (repo, path, time)
         ) strict;
         ",
     )
@@ -169,7 +169,7 @@ async fn record(sqlite: &SqlitePool, repo: &Utf8Path, path: &Utf8Path) -> anyhow
 
     let now = Timestamp::now().to_string();
 
-    sqlx::query("insert into empath (repo, path, at) values ($1, $2, $3)")
+    sqlx::query("insert into empath (repo, path, time) values ($1, $2, $3)")
         .bind(repo)
         .bind(path)
         .bind(now)
@@ -201,7 +201,7 @@ async fn recent(sqlite: &SqlitePool, repo: &Utf8Path) -> anyhow::Result<Vec<Utf8
         from empath
         where repo = $1
         group by path
-        order by max(at) desc
+        order by max(time) desc
         ",
     )
     .bind(repo)
