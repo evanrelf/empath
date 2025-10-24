@@ -5,7 +5,7 @@ use jiff::Timestamp;
 use pathdiff::diff_utf8_paths;
 use sqlx::{
     SqlitePool,
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous},
 };
 use std::{env, str::FromStr as _};
 use tokio::{fs, process};
@@ -71,14 +71,13 @@ async fn main() -> anyhow::Result<()> {
 
     let sqlite_path = state_dir.join("state.sqlite3");
 
-    let sqlite = SqlitePoolOptions::new()
-        .connect_with(
-            SqliteConnectOptions::from_str(&format!("sqlite://{sqlite_path}"))?
-                .create_if_missing(true)
-                .journal_mode(SqliteJournalMode::Wal)
-                .synchronous(SqliteSynchronous::Normal),
-        )
-        .await?;
+    let sqlite = SqlitePool::connect_with(
+        SqliteConnectOptions::from_str(&format!("sqlite://{sqlite_path}"))?
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Normal),
+    )
+    .await?;
 
     sqlite_init(&sqlite).await?;
 
