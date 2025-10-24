@@ -39,14 +39,14 @@ enum Command {
     },
 
     /// Print most recently used paths
-    Mru {
+    Recent {
         /// Print absolute paths
         #[arg(long)]
         absolute: bool,
     },
 
     /// Print most frequently used paths
-    Mfu {
+    Frequent {
         /// Print absolute paths
         #[arg(long)]
         absolute: bool,
@@ -105,8 +105,8 @@ async fn main() -> anyhow::Result<()> {
                 forget(&sqlite, &repo, &path).await?;
             }
         }
-        Command::Mru { absolute } => {
-            for path in mru(&sqlite, &repo).await? {
+        Command::Recent { absolute } => {
+            for path in recent(&sqlite, &repo).await? {
                 let path = if absolute {
                     path
                 } else {
@@ -115,8 +115,8 @@ async fn main() -> anyhow::Result<()> {
                 println!("{path}");
             }
         }
-        Command::Mfu { absolute } => {
-            for path in mfu(&sqlite, &repo).await? {
+        Command::Frequent { absolute } => {
+            for path in frequent(&sqlite, &repo).await? {
                 let path = if absolute {
                     path
                 } else {
@@ -192,7 +192,7 @@ async fn forget(sqlite: &SqlitePool, repo: &Utf8Path, path: &Utf8Path) -> anyhow
     Ok(())
 }
 
-async fn mru(sqlite: &SqlitePool, repo: &Utf8Path) -> anyhow::Result<Vec<Utf8PathBuf>> {
+async fn recent(sqlite: &SqlitePool, repo: &Utf8Path) -> anyhow::Result<Vec<Utf8PathBuf>> {
     let repo = repo.as_str();
 
     let rows: Vec<String> = sqlx::query_scalar(
@@ -216,7 +216,7 @@ async fn mru(sqlite: &SqlitePool, repo: &Utf8Path) -> anyhow::Result<Vec<Utf8Pat
     Ok(paths)
 }
 
-async fn mfu(sqlite: &SqlitePool, repo: &Utf8Path) -> anyhow::Result<Vec<Utf8PathBuf>> {
+async fn frequent(sqlite: &SqlitePool, repo: &Utf8Path) -> anyhow::Result<Vec<Utf8PathBuf>> {
     let repo = repo.as_str();
 
     let rows: Vec<String> = sqlx::query_scalar(
