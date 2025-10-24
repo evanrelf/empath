@@ -92,7 +92,11 @@ async fn main() -> anyhow::Result<()> {
         Command::Record { paths } => {
             for path in &paths {
                 let path = absolute_utf8(path)?;
-                record(&sqlite, &repo, &path).await?;
+                // TODO: Allow recording files outside of repo? Need to exclude temporary files like
+                // `*.jjdescription` and such.
+                if path.starts_with(&repo) {
+                    record(&sqlite, &repo, &path).await?;
+                }
             }
         }
         Command::Forget { paths } => {
