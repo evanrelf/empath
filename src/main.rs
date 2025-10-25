@@ -62,9 +62,6 @@ enum Command {
         #[arg(long)]
         absolute: bool,
     },
-
-    /// Delete state
-    Clean,
 }
 
 #[tokio::main]
@@ -157,10 +154,6 @@ async fn main() -> anyhow::Result<()> {
                 };
                 println!("{path}");
             }
-        }
-        Command::Clean => {
-            drop(sqlite);
-            fs::remove_file(sqlite_path).await?;
         }
     }
 
