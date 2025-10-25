@@ -16,7 +16,7 @@ use tokio::{fs, process};
 #[derive(clap::Parser, Debug)]
 #[command(disable_help_subcommand = true)]
 struct Args {
-    /// Use specified Git repo instead of inferring from working directory
+    /// Run as if started in another Git repo instead of working directory
     #[arg(long)]
     repo: Option<Utf8PathBuf>,
 
@@ -38,21 +38,21 @@ enum Command {
         paths: Vec<Utf8PathBuf>,
     },
 
-    /// Print most frequent+recently used paths
+    /// Print most frequent+recently accessed paths
     Frecent {
         /// Print absolute paths
         #[arg(long)]
         absolute: bool,
     },
 
-    /// Print most recently used paths
+    /// Print most recently accessed paths
     Recent {
         /// Print absolute paths
         #[arg(long)]
         absolute: bool,
     },
 
-    /// Print most frequently used paths
+    /// Print most frequently accessed paths
     Frequent {
         /// Print absolute paths
         #[arg(long)]
@@ -224,7 +224,7 @@ async fn frecent(sqlite: &SqlitePool, repo: &Utf8Path) -> anyhow::Result<Vec<Utf
         "
         select
             path,
-           julianday('now') - julianday(time) as age_days
+            julianday('now') - julianday(time) as age_days
         from empath
         where repo = $1
         ",
