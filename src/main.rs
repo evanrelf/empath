@@ -28,6 +28,10 @@ struct Args {
 enum Command {
     /// Record path access
     Record {
+        /// Record as if accessed at a different time
+        #[arg(long)]
+        time: Option<Timestamp>,
+
         #[arg(value_name = "PATH", required = true)]
         paths: Vec<Utf8PathBuf>,
     },
@@ -99,13 +103,13 @@ async fn main() -> anyhow::Result<()> {
     };
 
     match args.command {
-        Command::Record { paths } => {
+        Command::Record { time, paths } => {
             for path in &paths {
                 let path = absolute_utf8(path)?;
                 // TODO: Allow recording files outside of repo? Need to exclude temporary files like
                 // `*.jjdescription` and such.
                 if path.starts_with(&repo) {
-                    record(&sqlite, &repo, &path).await?;
+                    record(&sqlite, &repo, &path, time.as_ref()).await?;
                 }
             }
         }
@@ -196,16 +200,24 @@ async fn repo() -> anyhow::Result<Utf8PathBuf> {
     Ok(repo)
 }
 
-async fn record(sqlite: &SqlitePool, repo: &Utf8Path, path: &Utf8Path) -> anyhow::Result<()> {
+async fn record(
+    sqlite: &SqlitePool,
+    repo: &Utf8Path,
+    path: &Utf8Path,
+    time: Option<&Timestamp>,
+) -> anyhow::Result<()> {
     let repo = repo.as_str();
     let path = path.as_str();
 
-    let now = Timestamp::now().to_string();
+    let time = match time {
+        Some(time) => time.to_string(),
+        None => Timestamp::now().to_string(),
+    };
 
     sqlx::query("insert into empath (repo, path, time) values ($1, $2, $3)")
         .bind(repo)
         .bind(path)
-        .bind(now)
+        .bind(time)
         .execute(sqlite)
         .await?;
 
