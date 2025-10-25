@@ -117,6 +117,9 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Frecent { absolute } => {
             for path in frecent(&sqlite, &repo).await? {
+                if !path.try_exists().unwrap_or(false) {
+                    continue;
+                }
                 let path = if absolute {
                     path
                 } else {
@@ -127,6 +130,9 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Recent { absolute } => {
             for path in recent(&sqlite, &repo).await? {
+                if !path.try_exists().unwrap_or(false) {
+                    continue;
+                }
                 let path = if absolute {
                     path
                 } else {
@@ -137,6 +143,9 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Frequent { absolute } => {
             for path in frequent(&sqlite, &repo).await? {
+                if !path.try_exists().unwrap_or(false) {
+                    continue;
+                }
                 let path = if absolute {
                     path
                 } else {
