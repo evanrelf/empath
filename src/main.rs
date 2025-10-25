@@ -4,10 +4,10 @@ use etcetera::app_strategy::{AppStrategy as _, AppStrategyArgs, Xdg};
 use jiff::Timestamp;
 use pathdiff::diff_utf8_paths;
 use sqlx::{
-    SqlitePool,
+    Row as _, SqlitePool,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous},
 };
-use std::{env, str::FromStr as _};
+use std::{cmp::Ordering, collections::HashMap, env, str::FromStr as _};
 use tokio::{fs, process};
 
 // TODO: What about files that don't exist? Could be a temporary thing (e.g. switching branches) so
@@ -36,6 +36,13 @@ enum Command {
     Forget {
         #[arg(value_name = "PATH", required = true)]
         paths: Vec<Utf8PathBuf>,
+    },
+
+    /// Print most frequent+recently used paths
+    Frecent {
+        /// Print absolute paths
+        #[arg(long)]
+        absolute: bool,
     },
 
     /// Print most recently used paths
@@ -106,6 +113,16 @@ async fn main() -> anyhow::Result<()> {
             for path in &paths {
                 let path = absolute_utf8(path)?;
                 forget(&sqlite, &repo, &path).await?;
+            }
+        }
+        Command::Frecent { absolute } => {
+            for path in frecent(&sqlite, &repo).await? {
+                let path = if absolute {
+                    path
+                } else {
+                    diff_utf8_paths(&path, &current_dir).unwrap()
+                };
+                println!("{path}");
             }
         }
         Command::Recent { absolute } => {
@@ -197,6 +214,46 @@ async fn forget(sqlite: &SqlitePool, repo: &Utf8Path, path: &Utf8Path) -> anyhow
         .await?;
 
     Ok(())
+}
+
+// https://wiki.mozilla.org/User:Jesse/NewFrecency
+async fn frecent(sqlite: &SqlitePool, repo: &Utf8Path) -> anyhow::Result<Vec<Utf8PathBuf>> {
+    let repo = repo.as_str();
+
+    let rows = sqlx::query(
+        "
+        select
+            path,
+           julianday('now') - julianday(time) as age_days
+        from empath
+        where repo = $1
+        ",
+    )
+    .bind(repo)
+    .fetch_all(sqlite)
+    .await?;
+
+    let half_life_days = 30.0;
+
+    let mut scores = HashMap::new();
+
+    for row in rows {
+        let path: String = row.get("path");
+        let age_days: f64 = row.get("age_days");
+        let weight = 2f64.powf(-age_days / half_life_days);
+        *scores.entry(path).or_insert(0.0) += weight;
+    }
+
+    let mut items = scores.into_iter().collect::<Vec<_>>();
+
+    items.sort_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap_or(Ordering::Equal));
+
+    let paths = items
+        .into_iter()
+        .map(|(path, _)| Utf8PathBuf::from(path))
+        .collect();
+
+    Ok(paths)
 }
 
 async fn recent(sqlite: &SqlitePool, repo: &Utf8Path) -> anyhow::Result<Vec<Utf8PathBuf>> {
