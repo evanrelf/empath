@@ -10,9 +10,6 @@ use sqlx::{
 use std::{cmp::Ordering, collections::HashMap, env, str::FromStr as _};
 use tokio::{fs, process};
 
-// TODO: What about files that don't exist? Could be a temporary thing (e.g. switching branches) so
-// they shouldn't be removed from SQLite. But should they be filtered?
-
 #[derive(clap::Parser, Debug)]
 #[command(disable_help_subcommand = true)]
 struct Args {
