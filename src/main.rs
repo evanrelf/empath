@@ -33,32 +33,33 @@ enum Command {
         paths: Vec<Utf8PathBuf>,
     },
 
+    /// Query recorded paths
+    Query {
+        /// Print absolute paths
+        #[arg(long)]
+        absolute: bool,
+
+        #[command(subcommand)]
+        command: QueryCommand,
+    },
+
     /// Forget paths
     Forget {
         #[arg(value_name = "PATH", required = true)]
         paths: Vec<Utf8PathBuf>,
     },
+}
 
-    /// Print most frequent+recently accessed paths
-    Frecent {
-        /// Print absolute paths
-        #[arg(long)]
-        absolute: bool,
-    },
+#[derive(clap::Subcommand, Debug)]
+enum QueryCommand {
+    /// Most frequent+recently accessed
+    Frecent,
 
-    /// Print most recently accessed paths
-    Recent {
-        /// Print absolute paths
-        #[arg(long)]
-        absolute: bool,
-    },
+    /// Most recently accessed
+    Recent,
 
-    /// Print most frequently accessed paths
-    Frequent {
-        /// Print absolute paths
-        #[arg(long)]
-        absolute: bool,
-    },
+    /// Most frequently accessed
+    Frequent,
 }
 
 #[tokio::main]
@@ -107,50 +108,52 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        Command::Query { absolute, command } => match command {
+            QueryCommand::Frecent => {
+                for path in frecent(&sqlite, &repo).await? {
+                    if !path.try_exists().unwrap_or(false) {
+                        continue;
+                    }
+                    let path = if absolute {
+                        path
+                    } else {
+                        diff_utf8_paths(&path, &current_dir).unwrap()
+                    };
+                    println!("{path}");
+                }
+            }
+            QueryCommand::Recent => {
+                for path in recent(&sqlite, &repo).await? {
+                    if !path.try_exists().unwrap_or(false) {
+                        continue;
+                    }
+                    let path = if absolute {
+                        path
+                    } else {
+                        diff_utf8_paths(&path, &current_dir).unwrap()
+                    };
+                    println!("{path}");
+                }
+            }
+            QueryCommand::Frequent => {
+                for path in frequent(&sqlite, &repo).await? {
+                    if !path.try_exists().unwrap_or(false) {
+                        continue;
+                    }
+                    let path = if absolute {
+                        path
+                    } else {
+                        diff_utf8_paths(&path, &current_dir).unwrap()
+                    };
+                    println!("{path}");
+                }
+            }
+        },
         Command::Forget { paths } => {
             for path in &paths {
                 // Try to forget even if it doesn't exist anymore.
                 let path = absolute_utf8(path).unwrap_or_else(|_| path.clone());
                 forget(&sqlite, &repo, &path).await?;
-            }
-        }
-        Command::Frecent { absolute } => {
-            for path in frecent(&sqlite, &repo).await? {
-                if !path.try_exists().unwrap_or(false) {
-                    continue;
-                }
-                let path = if absolute {
-                    path
-                } else {
-                    diff_utf8_paths(&path, &current_dir).unwrap()
-                };
-                println!("{path}");
-            }
-        }
-        Command::Recent { absolute } => {
-            for path in recent(&sqlite, &repo).await? {
-                if !path.try_exists().unwrap_or(false) {
-                    continue;
-                }
-                let path = if absolute {
-                    path
-                } else {
-                    diff_utf8_paths(&path, &current_dir).unwrap()
-                };
-                println!("{path}");
-            }
-        }
-        Command::Frequent { absolute } => {
-            for path in frequent(&sqlite, &repo).await? {
-                if !path.try_exists().unwrap_or(false) {
-                    continue;
-                }
-                let path = if absolute {
-                    path
-                } else {
-                    diff_utf8_paths(&path, &current_dir).unwrap()
-                };
-                println!("{path}");
             }
         }
     }
