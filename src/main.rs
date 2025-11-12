@@ -108,47 +108,25 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        Command::Query { absolute, command } => match command {
-            QueryCommand::Frecent => {
-                for path in frecent(&sqlite, &repo).await? {
-                    if !path.try_exists().unwrap_or(false) {
-                        continue;
-                    }
-                    let path = if absolute {
-                        path
-                    } else {
-                        diff_utf8_paths(&path, &current_dir).unwrap()
-                    };
-                    println!("{path}");
+        Command::Query { absolute, command } => {
+            let paths = match command {
+                QueryCommand::Frecent => frecent(&sqlite, &repo).await?,
+                QueryCommand::Recent => recent(&sqlite, &repo).await?,
+                QueryCommand::Frequent => frequent(&sqlite, &repo).await?,
+            };
+
+            for path in paths {
+                if !path.try_exists().unwrap_or(false) {
+                    continue;
                 }
+                let path = if absolute {
+                    path
+                } else {
+                    diff_utf8_paths(path, &current_dir).unwrap()
+                };
+                println!("{path}");
             }
-            QueryCommand::Recent => {
-                for path in recent(&sqlite, &repo).await? {
-                    if !path.try_exists().unwrap_or(false) {
-                        continue;
-                    }
-                    let path = if absolute {
-                        path
-                    } else {
-                        diff_utf8_paths(&path, &current_dir).unwrap()
-                    };
-                    println!("{path}");
-                }
-            }
-            QueryCommand::Frequent => {
-                for path in frequent(&sqlite, &repo).await? {
-                    if !path.try_exists().unwrap_or(false) {
-                        continue;
-                    }
-                    let path = if absolute {
-                        path
-                    } else {
-                        diff_utf8_paths(&path, &current_dir).unwrap()
-                    };
-                    println!("{path}");
-                }
-            }
-        },
+        }
         Command::Forget { paths } => {
             for path in &paths {
                 // Try to forget even if it doesn't exist anymore.
