@@ -66,8 +66,6 @@ enum QueryCommand {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    tracing_subscriber::fmt::init();
-
     let xdg = Xdg::new(AppStrategyArgs {
         top_level_domain: String::from("com"),
         author: String::from("Evan Relf"),
