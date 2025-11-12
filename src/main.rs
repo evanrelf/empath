@@ -109,7 +109,8 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Forget { paths } => {
             for path in &paths {
-                let path = absolute_utf8(path)?;
+                // Try to forget even if it doesn't exist anymore.
+                let path = absolute_utf8(path).unwrap_or_else(|_| path.clone());
                 forget(&sqlite, &repo, &path).await?;
             }
         }
