@@ -15,7 +15,7 @@ use std::{
     io::{self, Write},
     str::FromStr as _,
 };
-use tokio::{fs, process};
+use tokio::{fs, process, task::JoinHandle};
 
 #[derive(clap::Parser, Debug)]
 #[command(disable_help_subcommand = true)]
@@ -133,20 +133,34 @@ async fn main() -> anyhow::Result<()> {
                 QueryCommand::Frequent => frequent(&sqlite, &repo, time.as_ref()).await?,
             };
 
+            let mut handles: Vec<JoinHandle<anyhow::Result<Option<Utf8PathBuf>>>> =
+                Vec::with_capacity(paths.len());
+
             for path in paths {
-                if !path.try_exists().unwrap_or(false) {
-                    continue;
-                }
-                if !no_ignore && is_ignored(&path).await? {
-                    continue;
-                }
-                let path = if absolute {
-                    path
-                } else {
-                    diff_utf8_paths(path, &current_dir).unwrap()
-                };
-                if writeln!(io::stdout(), "{path}").is_err() {
-                    break;
+                let current_dir = current_dir.clone();
+                let handle = tokio::spawn(async move {
+                    if !path.try_exists().unwrap_or(false) {
+                        return Ok(None);
+                    }
+                    if !no_ignore && is_ignored(&path).await? {
+                        return Ok(None);
+                    }
+                    let path = if absolute {
+                        path
+                    } else {
+                        diff_utf8_paths(path, &current_dir).unwrap()
+                    };
+                    Ok(Some(path))
+                });
+                handles.push(handle);
+            }
+
+            #[expect(clippy::collapsible_if)]
+            for handle in handles {
+                if let Some(path) = handle.await?? {
+                    if writeln!(io::stdout(), "{path}").is_err() {
+                        break;
+                    }
                 }
             }
         }
