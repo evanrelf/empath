@@ -125,24 +125,8 @@ async fn main() -> anyhow::Result<()> {
                 if !path.try_exists().unwrap_or(false) {
                     continue;
                 }
-                if !no_ignore {
-                    let exit_status = process::Command::new("git")
-                        .arg("check-ignore")
-                        .arg("--quiet")
-                        .arg(&path)
-                        .status()
-                        .await?;
-                    match exit_status.code() {
-                        // Ignored
-                        Some(0) => continue,
-                        // Not ignored
-                        Some(1) => {}
-                        Some(128) => anyhow::bail!("`git check-ignore` encountered a fatal error"),
-                        code => anyhow::bail!(
-                            "`git check-ignore` returned unexpected exit code: {:?}",
-                            code
-                        ),
-                    }
+                if !no_ignore && is_ignored(&path).await? {
+                    continue;
                 }
                 let path = if absolute {
                     path
@@ -195,6 +179,25 @@ async fn repo() -> anyhow::Result<Utf8PathBuf> {
     let repo = Utf8PathBuf::from(str::from_utf8(&output.stdout)?.trim());
 
     Ok(repo)
+}
+
+async fn is_ignored(path: &Utf8Path) -> anyhow::Result<bool> {
+    let exit_status = process::Command::new("git")
+        .arg("check-ignore")
+        .arg("--quiet")
+        .arg(path)
+        .status()
+        .await?;
+
+    match exit_status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        Some(128) => anyhow::bail!("`git check-ignore` encountered a fatal error"),
+        code => anyhow::bail!(
+            "`git check-ignore` returned unexpected exit code: {:?}",
+            code
+        ),
+    }
 }
 
 async fn record(
