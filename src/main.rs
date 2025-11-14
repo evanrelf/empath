@@ -39,6 +39,10 @@ enum Command {
         #[arg(long)]
         absolute: bool,
 
+        /// Include ignored paths
+        #[arg(long)]
+        no_ignore: bool,
+
         #[command(subcommand)]
         command: QueryCommand,
     },
@@ -106,7 +110,11 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        Command::Query { absolute, command } => {
+        Command::Query {
+            absolute,
+            no_ignore,
+            command,
+        } => {
             let paths = match command {
                 QueryCommand::Frecent => frecent(&sqlite, &repo).await?,
                 QueryCommand::Recent => recent(&sqlite, &repo).await?,
@@ -116,6 +124,25 @@ async fn main() -> anyhow::Result<()> {
             for path in paths {
                 if !path.try_exists().unwrap_or(false) {
                     continue;
+                }
+                if !no_ignore {
+                    let exit_status = process::Command::new("git")
+                        .arg("check-ignore")
+                        .arg("--quiet")
+                        .arg(&path)
+                        .status()
+                        .await?;
+                    match exit_status.code() {
+                        // Ignored
+                        Some(0) => continue,
+                        // Not ignored
+                        Some(1) => {}
+                        Some(128) => anyhow::bail!("`git check-ignore` encountered a fatal error"),
+                        code => anyhow::bail!(
+                            "`git check-ignore` returned unexpected exit code: {:?}",
+                            code
+                        ),
+                    }
                 }
                 let path = if absolute {
                     path
