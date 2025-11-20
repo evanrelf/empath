@@ -2,6 +2,7 @@ use camino::{Utf8Path, Utf8PathBuf, absolute_utf8};
 use clap::Parser as _;
 use etcetera::app_strategy::{AppStrategy as _, AppStrategyArgs, Xdg};
 use jiff::Timestamp;
+use parse_datetime::parse_datetime;
 use pathdiff::diff_utf8_paths;
 use sqlx::{
     Row as _, SqlitePool,
@@ -26,7 +27,7 @@ enum Command {
     /// Record path access
     Record {
         /// Record as if accessed at a different time
-        #[arg(long)]
+        #[arg(long, value_parser = parse_timestamp)]
         time: Option<Timestamp>,
 
         #[arg(value_name = "PATH", required = true)]
@@ -146,6 +147,11 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn parse_timestamp(input: &str) -> anyhow::Result<Timestamp> {
+    let zoned = parse_datetime(input)?;
+    Ok(zoned.timestamp())
 }
 
 async fn sqlite_init(sqlite: &SqlitePool) -> anyhow::Result<()> {
