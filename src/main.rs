@@ -44,6 +44,10 @@ enum Command {
         #[arg(long)]
         no_ignore: bool,
 
+        /// Query at a different time
+        #[arg(long, value_parser = parse_timestamp)]
+        time: Option<Timestamp>,
+
         #[command(subcommand)]
         command: QueryCommand,
     },
@@ -114,12 +118,13 @@ async fn main() -> anyhow::Result<()> {
         Command::Query {
             absolute,
             no_ignore,
+            time,
             command,
         } => {
             let paths = match command {
-                QueryCommand::Frecent => frecent(&sqlite, &repo).await?,
-                QueryCommand::Recent => recent(&sqlite, &repo).await?,
-                QueryCommand::Frequent => frequent(&sqlite, &repo).await?,
+                QueryCommand::Frecent => frecent(&sqlite, &repo, time.as_ref()).await?,
+                QueryCommand::Recent => recent(&sqlite, &repo, time.as_ref()).await?,
+                QueryCommand::Frequent => frequent(&sqlite, &repo, time.as_ref()).await?,
             };
 
             for path in paths {
@@ -211,7 +216,6 @@ async fn record(
 ) -> anyhow::Result<()> {
     let repo = repo.as_str();
     let path = path.as_str();
-
     let time = match time {
         Some(time) => time.to_string(),
         None => Timestamp::now().to_string(),
@@ -241,19 +245,29 @@ async fn forget(sqlite: &SqlitePool, repo: &Utf8Path, path: &Utf8Path) -> anyhow
 }
 
 // https://wiki.mozilla.org/User:Jesse/NewFrecency
-async fn frecent(sqlite: &SqlitePool, repo: &Utf8Path) -> anyhow::Result<Vec<Utf8PathBuf>> {
+async fn frecent(
+    sqlite: &SqlitePool,
+    repo: &Utf8Path,
+    time: Option<&Timestamp>,
+) -> anyhow::Result<Vec<Utf8PathBuf>> {
     let repo = repo.as_str();
+    let time = match time {
+        Some(time) => time.to_string(),
+        None => Timestamp::now().to_string(),
+    };
 
     let rows = sqlx::query(
         "
         select
             path,
-            julianday('now') - julianday(time) as age_days
+            julianday($2) - julianday(time) as age_days
         from empath
         where repo = $1
+          and time <= $2
         ",
     )
     .bind(repo)
+    .bind(time)
     .fetch_all(sqlite)
     .await?;
 
@@ -280,19 +294,29 @@ async fn frecent(sqlite: &SqlitePool, repo: &Utf8Path) -> anyhow::Result<Vec<Utf
     Ok(paths)
 }
 
-async fn recent(sqlite: &SqlitePool, repo: &Utf8Path) -> anyhow::Result<Vec<Utf8PathBuf>> {
+async fn recent(
+    sqlite: &SqlitePool,
+    repo: &Utf8Path,
+    time: Option<&Timestamp>,
+) -> anyhow::Result<Vec<Utf8PathBuf>> {
     let repo = repo.as_str();
+    let time = match time {
+        Some(time) => time.to_string(),
+        None => Timestamp::now().to_string(),
+    };
 
     let rows: Vec<String> = sqlx::query_scalar(
         "
         select path
         from empath
         where repo = $1
+          and time <= $2
         group by path
         order by max(time) desc
         ",
     )
     .bind(repo)
+    .bind(time)
     .fetch_all(sqlite)
     .await?;
 
@@ -304,19 +328,29 @@ async fn recent(sqlite: &SqlitePool, repo: &Utf8Path) -> anyhow::Result<Vec<Utf8
     Ok(paths)
 }
 
-async fn frequent(sqlite: &SqlitePool, repo: &Utf8Path) -> anyhow::Result<Vec<Utf8PathBuf>> {
+async fn frequent(
+    sqlite: &SqlitePool,
+    repo: &Utf8Path,
+    time: Option<&Timestamp>,
+) -> anyhow::Result<Vec<Utf8PathBuf>> {
     let repo = repo.as_str();
+    let time = match time {
+        Some(time) => time.to_string(),
+        None => Timestamp::now().to_string(),
+    };
 
     let rows: Vec<String> = sqlx::query_scalar(
         "
         select path
         from empath
         where repo = $1
+          and time <= $2
         group by path
         order by count(*) desc
         ",
     )
     .bind(repo)
+    .bind(time)
     .fetch_all(sqlite)
     .await?;
 
