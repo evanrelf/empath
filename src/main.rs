@@ -193,10 +193,7 @@ async fn is_ignored(path: &Utf8Path) -> anyhow::Result<bool> {
         Some(0) => Ok(true),
         Some(1) => Ok(false),
         Some(128) => anyhow::bail!("`git check-ignore` encountered a fatal error"),
-        code => anyhow::bail!(
-            "`git check-ignore` returned unexpected exit code: {:?}",
-            code
-        ),
+        code => anyhow::bail!("`git check-ignore` returned unexpected exit code: {code:?}"),
     }
 }
 
