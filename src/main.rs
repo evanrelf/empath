@@ -8,7 +8,13 @@ use sqlx::{
     Row as _, SqlitePool,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous},
 };
-use std::{cmp::Ordering, collections::HashMap, env, str::FromStr as _};
+use std::{
+    cmp::Ordering,
+    collections::HashMap,
+    env,
+    io::{self, Write},
+    str::FromStr as _,
+};
 use tokio::{fs, process};
 
 #[derive(clap::Parser, Debug)]
@@ -139,7 +145,9 @@ async fn main() -> anyhow::Result<()> {
                 } else {
                     diff_utf8_paths(path, &current_dir).unwrap()
                 };
-                println!("{path}");
+                if writeln!(io::stdout(), "{path}").is_err() {
+                    break;
+                }
             }
         }
         Command::Forget { paths } => {
