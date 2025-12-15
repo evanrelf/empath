@@ -54,6 +54,10 @@ enum Command {
         #[arg(long, value_parser = parse_timestamp)]
         time: Option<Timestamp>,
 
+        /// Print top n paths
+        #[arg(long, default_value_t = 100)]
+        limit: u32,
+
         #[command(subcommand)]
         command: QueryCommand,
     },
@@ -125,12 +129,13 @@ async fn main() -> anyhow::Result<()> {
             absolute,
             no_ignore,
             time,
+            limit,
             command,
         } => {
             let paths = match command {
-                QueryCommand::Frecent => frecent(&sqlite, &repo, time.as_ref()).await?,
-                QueryCommand::Recent => recent(&sqlite, &repo, time.as_ref()).await?,
-                QueryCommand::Frequent => frequent(&sqlite, &repo, time.as_ref()).await?,
+                QueryCommand::Frecent => frecent(&sqlite, &repo, time.as_ref(), limit).await?,
+                QueryCommand::Recent => recent(&sqlite, &repo, time.as_ref(), limit).await?,
+                QueryCommand::Frequent => frequent(&sqlite, &repo, time.as_ref(), limit).await?,
             };
 
             let mut handles: Vec<JoinHandle<anyhow::Result<Option<Utf8PathBuf>>>> =
@@ -277,6 +282,7 @@ async fn frecent(
     sqlite: &SqlitePool,
     repo: &Utf8Path,
     time: Option<&Timestamp>,
+    limit: u32,
 ) -> anyhow::Result<Vec<Utf8PathBuf>> {
     let repo = repo.as_str();
     let time = match time {
@@ -292,10 +298,12 @@ async fn frecent(
         from empath
         where repo = $1
           and time <= $2
+        limit $3
         ",
     )
     .bind(repo)
     .bind(time)
+    .bind(limit)
     .fetch_all(sqlite)
     .await?;
 
@@ -326,6 +334,7 @@ async fn recent(
     sqlite: &SqlitePool,
     repo: &Utf8Path,
     time: Option<&Timestamp>,
+    limit: u32,
 ) -> anyhow::Result<Vec<Utf8PathBuf>> {
     let repo = repo.as_str();
     let time = match time {
@@ -341,10 +350,12 @@ async fn recent(
           and time <= $2
         group by path
         order by max(time) desc
+        limit $3
         ",
     )
     .bind(repo)
     .bind(time)
+    .bind(limit)
     .fetch_all(sqlite)
     .await?;
 
@@ -360,6 +371,7 @@ async fn frequent(
     sqlite: &SqlitePool,
     repo: &Utf8Path,
     time: Option<&Timestamp>,
+    limit: u32,
 ) -> anyhow::Result<Vec<Utf8PathBuf>> {
     let repo = repo.as_str();
     let time = match time {
@@ -375,10 +387,12 @@ async fn frequent(
           and time <= $2
         group by path
         order by count(*) desc
+        limit $3
         ",
     )
     .bind(repo)
     .bind(time)
+    .bind(limit)
     .fetch_all(sqlite)
     .await?;
 
