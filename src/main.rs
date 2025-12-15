@@ -139,7 +139,7 @@ async fn main() -> anyhow::Result<()> {
             for path in paths {
                 let current_dir = current_dir.clone();
                 let handle = tokio::spawn(async move {
-                    if !path.try_exists().unwrap_or(false) {
+                    if fs::try_exists(&path).await.unwrap_or(false) {
                         return Ok(None);
                     }
                     if !no_ignore && is_ignored(&path).await? {
