@@ -298,7 +298,6 @@ async fn frecent(
         from empath
         where repo = $1
           and time <= $2
-        limit $3
         ",
     )
     .bind(repo)
@@ -324,6 +323,7 @@ async fn frecent(
 
     let paths = items
         .into_iter()
+        .take(usize::try_from(limit).expect("Machine has 64-bit pointers"))
         .map(|(path, _)| Utf8PathBuf::from(path))
         .collect();
 
