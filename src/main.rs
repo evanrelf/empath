@@ -195,6 +195,9 @@ fn parse_timestamp(input: &str) -> anyhow::Result<Timestamp> {
 }
 
 async fn sqlite_migrate(sqlite: &SqlitePool) -> anyhow::Result<()> {
+    // SQLite's 12-step generalized `alter table` procedure:
+    // https://www.sqlite.org/lang_altertable.html#otheralter
+
     const LATEST_VERSION: u16 = 2;
 
     loop {
