@@ -227,7 +227,7 @@ async fn sqlite_migrate(sqlite: &SqlitePool) -> anyhow::Result<()> {
                     .await?;
                 sqlx::query(
                     "
-                    create table if not exists empath (
+                    create table empath (
                         repo text not null,
                         path text not null,
                         time text not null,
