@@ -105,7 +105,7 @@ async fn main() -> anyhow::Result<()> {
     )
     .await?;
 
-    sqlite_init(&sqlite).await?;
+    sqlite_migrate(&sqlite).await?;
 
     let current_dir = Utf8PathBuf::try_from(env::current_dir()?)?;
 
@@ -194,7 +194,7 @@ fn parse_timestamp(input: &str) -> anyhow::Result<Timestamp> {
     Ok(zoned.timestamp())
 }
 
-async fn sqlite_init(sqlite: &SqlitePool) -> anyhow::Result<()> {
+async fn sqlite_migrate(sqlite: &SqlitePool) -> anyhow::Result<()> {
     const LATEST_VERSION: u16 = 2;
 
     loop {
