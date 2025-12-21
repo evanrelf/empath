@@ -248,11 +248,6 @@ Supported versions: 0..={LATEST_VERSION}
             .execute(&mut *tx)
             .await?;
 
-        eprintln!(
-            "Migrated database from version {current_version} to {}",
-            current_version + 1
-        );
-
         tx.commit().await?;
     }
 
