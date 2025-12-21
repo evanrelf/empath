@@ -195,6 +195,15 @@ fn parse_timestamp(input: &str) -> anyhow::Result<Timestamp> {
 }
 
 async fn sqlite_init(sqlite: &SqlitePool) -> anyhow::Result<()> {
+    // TODO: Add ability to migrate schema. I think doing something declarative like what this blog
+    // post describes would be cool:
+    // https://david.rothlis.net/declarative-schema-migration-for-sqlite/
+
+    // TODO: Put `time` before `path` in the unique index:
+    // ```diff
+    // -unique (repo, path, time)
+    // +unique (repo, time, path)
+    // ```
     sqlx::query(
         "
         create table if not exists empath (
