@@ -231,16 +231,8 @@ async fn sqlite_init(sqlite: &SqlitePool) -> anyhow::Result<()> {
             _ => {
                 tx.rollback().await?;
                 anyhow::bail!(
-                    format!(
-                        "
-Unsupported database version
-Current version:    {current_version}
-Supported versions: 0..={LATEST_VERSION}
-                        "
-                    )
-                    .trim()
-                    .to_string()
-                )
+                    "Database version {current_version} is newer than supported (max: {LATEST_VERSION})"
+                );
             }
         }
 
