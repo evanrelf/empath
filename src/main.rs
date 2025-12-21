@@ -184,6 +184,8 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    sqlite_finish(&sqlite).await?;
+
     Ok(())
 }
 
@@ -201,6 +203,18 @@ async fn sqlite_init(sqlite: &SqlitePool) -> anyhow::Result<()> {
             time text not null,
             unique (repo, path, time)
         ) strict;
+        ",
+    )
+    .execute(sqlite)
+    .await?;
+
+    Ok(())
+}
+
+async fn sqlite_finish(sqlite: &SqlitePool) -> anyhow::Result<()> {
+    sqlx::query(
+        "
+        pragma optimize;
         ",
     )
     .execute(sqlite)
