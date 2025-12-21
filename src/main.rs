@@ -195,27 +195,66 @@ fn parse_timestamp(input: &str) -> anyhow::Result<Timestamp> {
 }
 
 async fn sqlite_init(sqlite: &SqlitePool) -> anyhow::Result<()> {
-    // TODO: Add ability to migrate schema. I think doing something declarative like what this blog
-    // post describes would be cool:
-    // https://david.rothlis.net/declarative-schema-migration-for-sqlite/
+    const LATEST_VERSION: u16 = 1;
 
-    // TODO: Put `time` before `path` in the unique index:
-    // ```diff
-    // -unique (repo, path, time)
-    // +unique (repo, time, path)
-    // ```
-    sqlx::query(
-        "
-        create table if not exists empath (
-            repo text not null,
-            path text not null,
-            time text not null,
-            unique (repo, path, time)
-        ) strict;
-        ",
-    )
-    .execute(sqlite)
-    .await?;
+    loop {
+        let mut tx = sqlite.begin().await?;
+
+        let current_version: u16 = sqlx::query_scalar("pragma user_version")
+            .fetch_one(&mut *tx)
+            .await?;
+
+        match current_version {
+            0 => {
+                sqlx::query(
+                    "
+                    create table if not exists empath (
+                        repo text not null,
+                        path text not null,
+                        time text not null,
+                        unique (repo, path, time)
+                    ) strict;
+                    ",
+                )
+                .execute(&mut *tx)
+                .await?;
+            }
+            // TODO: Put `time` before `path` in the unique index:
+            // ```diff
+            // -unique (repo, path, time)
+            // +unique (repo, time, path)
+            // ```
+            LATEST_VERSION => {
+                tx.rollback().await?;
+                break;
+            }
+            _ => {
+                tx.rollback().await?;
+                anyhow::bail!(
+                    format!(
+                        "
+Unsupported database version
+Current version:    {current_version}
+Supported versions: 0..={LATEST_VERSION}
+                        "
+                    )
+                    .trim()
+                    .to_string()
+                )
+            }
+        }
+
+        sqlx::query(&format!("pragma user_version = {}", current_version + 1))
+            .execute(&mut *tx)
+            .await?;
+
+        eprintln!(
+            "Migrated database from version {current_version} to {}",
+            current_version + 1
+        );
+
+        tx.commit().await?;
+    }
 
     Ok(())
 }
