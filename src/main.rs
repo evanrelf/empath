@@ -195,7 +195,7 @@ fn parse_timestamp(input: &str) -> anyhow::Result<Timestamp> {
 }
 
 async fn sqlite_init(sqlite: &SqlitePool) -> anyhow::Result<()> {
-    const LATEST_VERSION: u16 = 1;
+    const LATEST_VERSION: u16 = 2;
 
     loop {
         let mut tx = sqlite.begin().await?;
@@ -206,6 +206,7 @@ async fn sqlite_init(sqlite: &SqlitePool) -> anyhow::Result<()> {
 
         match current_version {
             0 => {
+                // Initialize database
                 sqlx::query(
                     "
                     create table if not exists empath (
@@ -219,11 +220,30 @@ async fn sqlite_init(sqlite: &SqlitePool) -> anyhow::Result<()> {
                 .execute(&mut *tx)
                 .await?;
             }
-            // TODO: Put `time` before `path` in the unique index:
-            // ```diff
-            // -unique (repo, path, time)
-            // +unique (repo, time, path)
-            // ```
+            1 => {
+                // Put `time` before `path` in the unique index
+                sqlx::query("alter table empath rename to empath_old;")
+                    .execute(&mut *tx)
+                    .await?;
+                sqlx::query(
+                    "
+                    create table if not exists empath (
+                        repo text not null,
+                        path text not null,
+                        time text not null,
+                        unique (repo, time, path)
+                    ) strict;
+                    ",
+                )
+                .execute(&mut *tx)
+                .await?;
+                sqlx::query("insert into empath select * from empath_old;")
+                    .execute(&mut *tx)
+                    .await?;
+                sqlx::query("drop table empath_old;")
+                    .execute(&mut *tx)
+                    .await?;
+            }
             LATEST_VERSION => {
                 tx.rollback().await?;
                 break;
