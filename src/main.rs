@@ -116,10 +116,11 @@ async fn main() -> anyhow::Result<()> {
     match args.command {
         Command::Record { time, path } => {
             let path = absolute_utf8(path)?;
+            let time = time.unwrap_or_else(|| Timestamp::now());
             // TODO: Allow recording files outside of repo? Need to exclude temporary files like
             // `*.jjdescription` and such.
             if path.starts_with(&repo) {
-                record(&sqlite, &repo, &path, time.as_ref()).await?;
+                record(&sqlite, &repo, &path, &time).await?;
             }
         }
         Command::Query {
@@ -129,10 +130,11 @@ async fn main() -> anyhow::Result<()> {
             limit,
             command,
         } => {
+            let time = time.unwrap_or_else(|| Timestamp::now());
             let paths = match command {
-                QueryCommand::Frecent => frecent(&sqlite, &repo, time.as_ref(), limit).await?,
-                QueryCommand::Recent => recent(&sqlite, &repo, time.as_ref(), limit).await?,
-                QueryCommand::Frequent => frequent(&sqlite, &repo, time.as_ref(), limit).await?,
+                QueryCommand::Frecent => frecent(&sqlite, &repo, &time, limit).await?,
+                QueryCommand::Recent => recent(&sqlite, &repo, &time, limit).await?,
+                QueryCommand::Frequent => frequent(&sqlite, &repo, &time, limit).await?,
             };
 
             let mut handles: Vec<JoinHandle<anyhow::Result<Option<Utf8PathBuf>>>> =
@@ -337,14 +339,11 @@ async fn record(
     sqlite: &SqlitePool,
     repo: &Utf8Path,
     path: &Utf8Path,
-    time: Option<&Timestamp>,
+    time: &Timestamp,
 ) -> anyhow::Result<()> {
     let repo = repo.as_str();
     let path = path.as_str();
-    let time = match time {
-        Some(time) => time.to_string(),
-        None => Timestamp::now().to_string(),
-    };
+    let time = time.to_string();
 
     sqlx::query("insert into empath (repo, path, time) values ($1, $2, $3)")
         .bind(repo)
@@ -373,14 +372,11 @@ async fn forget(sqlite: &SqlitePool, repo: &Utf8Path, path: &Utf8Path) -> anyhow
 async fn frecent(
     sqlite: &SqlitePool,
     repo: &Utf8Path,
-    time: Option<&Timestamp>,
+    time: &Timestamp,
     limit: u32,
 ) -> anyhow::Result<Vec<Utf8PathBuf>> {
     let repo = repo.as_str();
-    let time = match time {
-        Some(time) => time.to_string(),
-        None => Timestamp::now().to_string(),
-    };
+    let time = time.to_string();
 
     let rows = sqlx::query(
         "
@@ -425,14 +421,11 @@ async fn frecent(
 async fn recent(
     sqlite: &SqlitePool,
     repo: &Utf8Path,
-    time: Option<&Timestamp>,
+    time: &Timestamp,
     limit: u32,
 ) -> anyhow::Result<Vec<Utf8PathBuf>> {
     let repo = repo.as_str();
-    let time = match time {
-        Some(time) => time.to_string(),
-        None => Timestamp::now().to_string(),
-    };
+    let time = time.to_string();
 
     let rows: Vec<String> = sqlx::query_scalar(
         "
@@ -462,14 +455,11 @@ async fn recent(
 async fn frequent(
     sqlite: &SqlitePool,
     repo: &Utf8Path,
-    time: Option<&Timestamp>,
+    time: &Timestamp,
     limit: u32,
 ) -> anyhow::Result<Vec<Utf8PathBuf>> {
     let repo = repo.as_str();
-    let time = match time {
-        Some(time) => time.to_string(),
-        None => Timestamp::now().to_string(),
-    };
+    let time = time.to_string();
 
     let rows: Vec<String> = sqlx::query_scalar(
         "
