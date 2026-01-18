@@ -198,70 +198,95 @@ async fn sqlite_migrate(sqlite: &SqlitePool) -> anyhow::Result<()> {
     const LATEST_VERSION: u16 = 2;
 
     loop {
-        let mut tx = sqlite.begin().await?;
-
-        let current_version: u16 = sqlx::query_scalar("pragma user_version")
-            .fetch_one(&mut *tx)
+        let user_version: u16 = sqlx::query_scalar("pragma user_version")
+            .fetch_one(sqlite)
             .await?;
 
-        match current_version {
-            0 => {
-                // Initialize database
-                sqlx::query(
-                    "
-                    create table if not exists empath (
-                        repo text not null,
-                        path text not null,
-                        time text not null,
-                        unique (repo, path, time)
-                    ) strict;
-                    ",
-                )
-                .execute(&mut *tx)
-                .await?;
-            }
-            1 => {
-                // Put `time` before `path` in the unique index
-                sqlx::query("alter table empath rename to empath_old;")
-                    .execute(&mut *tx)
-                    .await?;
-                sqlx::query(
-                    "
-                    create table empath (
-                        repo text not null,
-                        path text not null,
-                        time text not null,
-                        unique (repo, time, path)
-                    ) strict;
-                    ",
-                )
-                .execute(&mut *tx)
-                .await?;
-                sqlx::query("insert into empath select * from empath_old;")
-                    .execute(&mut *tx)
-                    .await?;
-                sqlx::query("drop table empath_old;")
-                    .execute(&mut *tx)
-                    .await?;
-            }
-            LATEST_VERSION => {
-                tx.rollback().await?;
-                break;
-            }
-            _ => {
-                tx.rollback().await?;
-                anyhow::bail!(
-                    "Database version {current_version} is newer than supported (max: {LATEST_VERSION})"
-                );
-            }
+        match user_version {
+            0 => sqlite_migrate_0(sqlite).await?,
+            1 => sqlite_migrate_1(sqlite).await?,
+            LATEST_VERSION => break,
+            _ => anyhow::bail!(
+                "Database version {user_version} is newer than supported (max: {LATEST_VERSION})"
+            ),
         }
-
-        sqlx::query(&format!("pragma user_version = {}", current_version + 1))
-            .execute(&mut *tx)
-            .await?;
-
-        tx.commit().await?;
     }
+
+    Ok(())
+}
+
+// Initialize database
+async fn sqlite_migrate_0(sqlite: &SqlitePool) -> anyhow::Result<()> {
+    let mut tx = sqlite.begin().await?;
+
+    let user_version: u16 = sqlx::query_scalar("pragma user_version;")
+        .fetch_one(&mut *tx)
+        .await?;
+
+    assert_eq!(user_version, 0);
+
+    sqlx::query(
+        "
+        create table if not exists empath (
+            repo text not null,
+            path text not null,
+            time text not null,
+            unique (repo, path, time)
+        ) strict;
+        ",
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(&format!("pragma user_version = {};", user_version + 1))
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+
+    Ok(())
+}
+
+// Put `time` before `path` in the unique index
+async fn sqlite_migrate_1(sqlite: &SqlitePool) -> anyhow::Result<()> {
+    let mut tx = sqlite.begin().await?;
+
+    let user_version: u16 = sqlx::query_scalar("pragma user_version;")
+        .fetch_one(&mut *tx)
+        .await?;
+
+    assert_eq!(user_version, 1);
+
+    sqlx::query("alter table empath rename to empath_old;")
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query(
+        "
+        create table empath (
+            repo text not null,
+            path text not null,
+            time text not null,
+            unique (repo, time, path)
+        ) strict;
+        ",
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query("insert into empath select * from empath_old;")
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query("drop table empath_old;")
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query(&format!("pragma user_version = {};", user_version + 1))
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
 
     Ok(())
 }
