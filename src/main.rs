@@ -257,13 +257,9 @@ async fn sqlite_migrate_1(sqlite: &SqlitePool) -> anyhow::Result<()> {
 
     assert_eq!(user_version, 1);
 
-    sqlx::query("alter table empath rename to empath_old;")
-        .execute(&mut *tx)
-        .await?;
-
     sqlx::query(
         "
-        create table empath (
+        create table new_empath (
             repo text not null,
             path text not null,
             time text not null,
@@ -274,11 +270,13 @@ async fn sqlite_migrate_1(sqlite: &SqlitePool) -> anyhow::Result<()> {
     .execute(&mut *tx)
     .await?;
 
-    sqlx::query("insert into empath select * from empath_old;")
+    sqlx::query("insert into new_empath select * from empath;")
         .execute(&mut *tx)
         .await?;
 
-    sqlx::query("drop table empath_old;")
+    sqlx::query("drop table empath;").execute(&mut *tx).await?;
+
+    sqlx::query("alter table new_empath rename to empath;")
         .execute(&mut *tx)
         .await?;
 
