@@ -36,8 +36,7 @@ enum Command {
         #[arg(long, value_parser = parse_timestamp)]
         time: Option<Timestamp>,
 
-        #[arg(value_name = "PATH", required = true)]
-        paths: Vec<Utf8PathBuf>,
+        path: Utf8PathBuf,
     },
 
     /// Query recorded paths
@@ -115,14 +114,12 @@ async fn main() -> anyhow::Result<()> {
     };
 
     match args.command {
-        Command::Record { time, paths } => {
-            for path in &paths {
-                let path = absolute_utf8(path)?;
-                // TODO: Allow recording files outside of repo? Need to exclude temporary files like
-                // `*.jjdescription` and such.
-                if path.starts_with(&repo) {
-                    record(&sqlite, &repo, &path, time.as_ref()).await?;
-                }
+        Command::Record { time, path } => {
+            let path = absolute_utf8(path)?;
+            // TODO: Allow recording files outside of repo? Need to exclude temporary files like
+            // `*.jjdescription` and such.
+            if path.starts_with(&repo) {
+                record(&sqlite, &repo, &path, time.as_ref()).await?;
             }
         }
         Command::Query {
