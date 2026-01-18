@@ -32,6 +32,10 @@ struct Args {
 enum Command {
     /// Record path access
     Record {
+        /// Record as if accessed from a different working directory
+        #[arg(long, value_name = "PATH")]
+        cwd: Option<Utf8PathBuf>,
+
         /// Record as if accessed at a different time
         #[arg(long, value_parser = parse_timestamp)]
         time: Option<Timestamp>,
@@ -114,13 +118,17 @@ async fn main() -> anyhow::Result<()> {
     };
 
     match args.command {
-        Command::Record { time, path } => {
-            let path = absolute_utf8(path)?;
+        Command::Record { cwd, time, path } => {
+            let cwd = absolute_utf8(match cwd {
+                Some(cwd) => cwd,
+                None => Utf8PathBuf::try_from(env::current_dir()?)?,
+            })?;
             let time = time.unwrap_or_else(|| Timestamp::now());
+            let path = absolute_utf8(path)?;
             // TODO: Allow recording files outside of repo? Need to exclude temporary files like
             // `*.jjdescription` and such.
             if path.starts_with(&repo) {
-                record(&sqlite, &repo, &path, &time).await?;
+                record(&sqlite, &repo, &path, &cwd, &time).await?;
             }
         }
         Command::Query {
@@ -197,7 +205,7 @@ async fn sqlite_migrate(sqlite: &SqlitePool) -> anyhow::Result<()> {
     // SQLite's 12-step generalized `alter table` procedure:
     // https://www.sqlite.org/lang_altertable.html#otheralter
 
-    const LATEST_VERSION: u16 = 2;
+    const LATEST_VERSION: u16 = 3;
 
     loop {
         let user_version: u16 = sqlx::query_scalar("pragma user_version")
@@ -207,6 +215,7 @@ async fn sqlite_migrate(sqlite: &SqlitePool) -> anyhow::Result<()> {
         match user_version {
             0 => sqlite_migrate_0(sqlite).await?,
             1 => sqlite_migrate_1(sqlite).await?,
+            2 => sqlite_migrate_2(sqlite).await?,
             LATEST_VERSION => break,
             _ => anyhow::bail!(
                 "Database version {user_version} is newer than supported (max: {LATEST_VERSION})"
@@ -291,6 +300,67 @@ async fn sqlite_migrate_1(sqlite: &SqlitePool) -> anyhow::Result<()> {
     Ok(())
 }
 
+// Add `cwd` column. Default to `repo` for historical data. Also enable foreign key enforcement.
+async fn sqlite_migrate_2(sqlite: &SqlitePool) -> anyhow::Result<()> {
+    sqlx::query("pragma foreign_keys = off;")
+        .execute(sqlite)
+        .await?;
+
+    let mut tx = sqlite.begin().await?;
+
+    let user_version: u16 = sqlx::query_scalar("pragma user_version;")
+        .fetch_one(&mut *tx)
+        .await?;
+
+    assert_eq!(user_version, 2);
+
+    sqlx::query(
+        "
+        create table new_empath (
+            repo text not null,
+            path text not null,
+            cwd text not null,
+            time text not null,
+            unique (repo, time, cwd, path)
+        ) strict;
+        ",
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "
+        insert into new_empath
+        select
+            repo,
+            path,
+            repo as cwd,
+            time
+        from empath;
+        ",
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query("drop table empath;").execute(&mut *tx).await?;
+
+    sqlx::query("alter table new_empath rename to empath;")
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query(&format!("pragma user_version = {};", user_version + 1))
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+
+    sqlx::query("pragma foreign_keys = on;")
+        .execute(sqlite)
+        .await?;
+
+    Ok(())
+}
+
 async fn sqlite_finish(sqlite: &SqlitePool) -> anyhow::Result<()> {
     sqlx::query(
         "
@@ -339,11 +409,13 @@ async fn record(
     sqlite: &SqlitePool,
     repo: &Utf8Path,
     path: &Utf8Path,
+    cwd: &Utf8Path,
     time: &Timestamp,
 ) -> anyhow::Result<()> {
-    sqlx::query("insert into empath (repo, path, time) values ($1, $2, $3)")
+    sqlx::query("insert into empath (repo, path, cwd, time) values ($1, $2, $3, $4)")
         .bind(repo.as_str())
         .bind(path.as_str())
+        .bind(cwd.as_str())
         .bind(time.to_string())
         .execute(sqlite)
         .await?;
