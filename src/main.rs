@@ -341,14 +341,10 @@ async fn record(
     path: &Utf8Path,
     time: &Timestamp,
 ) -> anyhow::Result<()> {
-    let repo = repo.as_str();
-    let path = path.as_str();
-    let time = time.to_string();
-
     sqlx::query("insert into empath (repo, path, time) values ($1, $2, $3)")
-        .bind(repo)
-        .bind(path)
-        .bind(time)
+        .bind(repo.as_str())
+        .bind(path.as_str())
+        .bind(time.to_string())
         .execute(sqlite)
         .await?;
 
@@ -356,12 +352,9 @@ async fn record(
 }
 
 async fn forget(sqlite: &SqlitePool, repo: &Utf8Path, path: &Utf8Path) -> anyhow::Result<()> {
-    let repo = repo.as_str();
-    let path = path.as_str();
-
     sqlx::query("delete from empath where repo = $1 and path = $2")
-        .bind(repo)
-        .bind(path)
+        .bind(repo.as_str())
+        .bind(path.as_str())
         .execute(sqlite)
         .await?;
 
@@ -375,9 +368,6 @@ async fn frecent(
     time: &Timestamp,
     limit: u32,
 ) -> anyhow::Result<Vec<Utf8PathBuf>> {
-    let repo = repo.as_str();
-    let time = time.to_string();
-
     let rows = sqlx::query(
         "
         select
@@ -388,8 +378,8 @@ async fn frecent(
           and time <= $2
         ",
     )
-    .bind(repo)
-    .bind(time)
+    .bind(repo.as_str())
+    .bind(time.to_string())
     .bind(limit)
     .fetch_all(sqlite)
     .await?;
@@ -424,9 +414,6 @@ async fn recent(
     time: &Timestamp,
     limit: u32,
 ) -> anyhow::Result<Vec<Utf8PathBuf>> {
-    let repo = repo.as_str();
-    let time = time.to_string();
-
     let rows: Vec<String> = sqlx::query_scalar(
         "
         select path
@@ -438,8 +425,8 @@ async fn recent(
         limit $3
         ",
     )
-    .bind(repo)
-    .bind(time)
+    .bind(repo.as_str())
+    .bind(time.to_string())
     .bind(limit)
     .fetch_all(sqlite)
     .await?;
@@ -458,9 +445,6 @@ async fn frequent(
     time: &Timestamp,
     limit: u32,
 ) -> anyhow::Result<Vec<Utf8PathBuf>> {
-    let repo = repo.as_str();
-    let time = time.to_string();
-
     let rows: Vec<String> = sqlx::query_scalar(
         "
         select path
@@ -472,8 +456,8 @@ async fn frequent(
         limit $3
         ",
     )
-    .bind(repo)
-    .bind(time)
+    .bind(repo.as_str())
+    .bind(time.to_string())
     .bind(limit)
     .fetch_all(sqlite)
     .await?;
