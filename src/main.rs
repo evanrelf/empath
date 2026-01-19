@@ -18,7 +18,7 @@ use std::{
 };
 use tokio::{fs, process, task::JoinHandle};
 
-#[derive(clap::Parser, Debug)]
+#[derive(clap::Parser)]
 #[command(disable_help_subcommand = true)]
 struct Args {
     /// Run as if started in another Git repo instead of working directory
@@ -29,7 +29,7 @@ struct Args {
     command: Command,
 }
 
-#[derive(clap::Subcommand, Debug)]
+#[derive(clap::Subcommand)]
 enum Command {
     /// Record path access
     Record {
@@ -67,7 +67,7 @@ enum Command {
     },
 }
 
-#[derive(clap::Subcommand, Debug)]
+#[derive(clap::Subcommand)]
 enum QueryCommand {
     /// Most frequent+recently accessed
     Frecent,
