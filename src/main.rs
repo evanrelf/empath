@@ -13,6 +13,7 @@ use std::{
     cmp::Ordering,
     collections::HashMap,
     env,
+    fmt::{self, Display},
     io::{self, Write},
     str::FromStr as _,
 };
@@ -31,8 +32,12 @@ struct Args {
 
 #[derive(clap::Subcommand)]
 enum Command {
-    /// Record path access
+    /// Record file access
     Record {
+        /// Record a specific event
+        #[arg(long, default_value_t = Event::Access)]
+        event: Event,
+
         /// Record as if accessed from a different working directory
         #[arg(long, value_name = "PATH")]
         cwd: Option<Utf8PathBuf>,
@@ -67,6 +72,45 @@ enum Command {
     },
 }
 
+// TODO: Not sure what design to choose. The goal is to 1) continue supporting discrete file access
+// events, and 2) add support for file access duration. If the duration is short, it may indicate
+// the file was opened by mistake, so the access should be discarded or not affect the score in
+// queries.
+//
+// "Access" is mostly there as a default, both for when `--event` isn't specified, and for
+// historical data. But it could be removed in favor of "open" if, when a corresponding "close" is
+// missing, it's implicitly considered an access, i.e. the file isn't considered still open
+// indefinitely.
+//
+// "Close" isn't associated with an "open" right now. The relationship between the two is implicit,
+// so if the file is opened in two places, there's ambiguity. Does that ambiguity matter? I don't
+// know. If it does, I could have these be subcommands: "open" prints the integer primary key, and
+// "close" requires specifying the primary key, so that they're linked.
+//
+// Then, how is this represented in the database? Without associating events, they could be separate
+// events, with an "event kind" column. Or there could be "open time" and "close time" columns.
+
+#[derive(clap::ValueEnum, Clone)]
+enum Event {
+    /// File accessed
+    Access,
+
+    /// File opened
+    Open,
+
+    /// File closed
+    Close,
+}
+
+impl Display for Event {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Access => write!(f, "access"),
+            Self::Open => write!(f, "open"),
+            Self::Close => write!(f, "close"),
+        }
+    }
+}
 #[derive(clap::Subcommand)]
 enum QueryCommand {
     /// Most frequent+recently accessed
@@ -113,7 +157,12 @@ async fn main() -> anyhow::Result<()> {
     };
 
     match args.command {
-        Command::Record { cwd, time, path } => {
+        Command::Record {
+            event,
+            cwd,
+            time,
+            path,
+        } => {
             let cwd = absolute_utf8(match cwd {
                 Some(cwd) => cwd,
                 None => Utf8PathBuf::try_from(env::current_dir()?)?,
