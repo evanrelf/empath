@@ -5,8 +5,9 @@ use jiff::Timestamp;
 use parse_datetime::parse_datetime;
 use pathdiff::diff_utf8_paths;
 use sqlx::{
-    Row as _, SqlitePool,
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous},
+    Acquire as _, Row as _, SqlitePool,
+    pool::PoolConnection,
+    sqlite::{Sqlite, SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous},
 };
 use std::{
     cmp::Ordering,
@@ -207,15 +208,17 @@ async fn sqlite_migrate(sqlite: &SqlitePool) -> anyhow::Result<()> {
 
     const LATEST_VERSION: u16 = 3;
 
+    let mut conn = sqlite.acquire().await?;
+
     loop {
         let user_version: u16 = sqlx::query_scalar("pragma user_version")
-            .fetch_one(sqlite)
+            .fetch_one(&mut *conn)
             .await?;
 
         match user_version {
-            0 => sqlite_migrate_0(sqlite).await?,
-            1 => sqlite_migrate_1(sqlite).await?,
-            2 => sqlite_migrate_2(sqlite).await?,
+            0 => sqlite_migrate_0(&mut conn).await?,
+            1 => sqlite_migrate_1(&mut conn).await?,
+            2 => sqlite_migrate_2(&mut conn).await?,
             LATEST_VERSION => break,
             _ => anyhow::bail!(
                 "Database version {user_version} is newer than supported (max: {LATEST_VERSION})"
@@ -227,7 +230,7 @@ async fn sqlite_migrate(sqlite: &SqlitePool) -> anyhow::Result<()> {
 }
 
 // Initialize database
-async fn sqlite_migrate_0(sqlite: &SqlitePool) -> anyhow::Result<()> {
+async fn sqlite_migrate_0(sqlite: &mut PoolConnection<Sqlite>) -> anyhow::Result<()> {
     let mut tx = sqlite.begin().await?;
 
     let user_version: u16 = sqlx::query_scalar("pragma user_version;")
@@ -259,7 +262,7 @@ async fn sqlite_migrate_0(sqlite: &SqlitePool) -> anyhow::Result<()> {
 }
 
 // Put `time` before `path` in the unique index
-async fn sqlite_migrate_1(sqlite: &SqlitePool) -> anyhow::Result<()> {
+async fn sqlite_migrate_1(sqlite: &mut PoolConnection<Sqlite>) -> anyhow::Result<()> {
     let mut tx = sqlite.begin().await?;
 
     let user_version: u16 = sqlx::query_scalar("pragma user_version;")
@@ -301,9 +304,9 @@ async fn sqlite_migrate_1(sqlite: &SqlitePool) -> anyhow::Result<()> {
 }
 
 // Add `cwd` column. Default to `repo` for historical data. Also enable foreign key enforcement.
-async fn sqlite_migrate_2(sqlite: &SqlitePool) -> anyhow::Result<()> {
+async fn sqlite_migrate_2(sqlite: &mut PoolConnection<Sqlite>) -> anyhow::Result<()> {
     sqlx::query("pragma foreign_keys = off;")
-        .execute(sqlite)
+        .execute(&mut **sqlite)
         .await?;
 
     let mut tx = sqlite.begin().await?;
@@ -355,7 +358,7 @@ async fn sqlite_migrate_2(sqlite: &SqlitePool) -> anyhow::Result<()> {
     tx.commit().await?;
 
     sqlx::query("pragma foreign_keys = on;")
-        .execute(sqlite)
+        .execute(&mut **sqlite)
         .await?;
 
     Ok(())
