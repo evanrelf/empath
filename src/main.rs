@@ -65,12 +65,6 @@ enum Command {
         #[command(subcommand)]
         command: QueryCommand,
     },
-
-    /// Forget paths
-    Forget {
-        #[arg(value_name = "PATH", required = true)]
-        paths: Vec<Utf8PathBuf>,
-    },
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -181,13 +175,6 @@ async fn main() -> anyhow::Result<()> {
                         break;
                     }
                 }
-            }
-        }
-        Command::Forget { paths } => {
-            for path in &paths {
-                // Try to forget even if it doesn't exist anymore.
-                let path = absolute_utf8(path).unwrap_or_else(|_| path.clone());
-                forget(&sqlite, &repo, &path).await?;
             }
         }
     }
@@ -420,16 +407,6 @@ async fn record(
         .bind(path.as_str())
         .bind(cwd.as_str())
         .bind(time.to_string())
-        .execute(sqlite)
-        .await?;
-
-    Ok(())
-}
-
-async fn forget(sqlite: &SqlitePool, repo: &Utf8Path, path: &Utf8Path) -> anyhow::Result<()> {
-    sqlx::query("delete from empath where repo = $1 and path = $2")
-        .bind(repo.as_str())
-        .bind(path.as_str())
         .execute(sqlite)
         .await?;
 
