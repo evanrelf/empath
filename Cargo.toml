@@ -11,7 +11,7 @@ etcetera = "0.11.0"
 jiff = "0.2.16"
 parse_datetime = "0.13.2"
 pathdiff = { version = "0.2.3", features = ["camino"] }
-sqlx = { version = "0.8.6", features = ["runtime-tokio", "sqlite"] }
+rusqlite = { version = "0.38.0", features = ["bundled", "jiff"] }
 tokio = { version = "1.48.0", features = ["full"] }
 
 [lints]

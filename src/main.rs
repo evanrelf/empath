@@ -4,17 +4,12 @@ use etcetera::app_strategy::{AppStrategy as _, AppStrategyArgs, Xdg};
 use jiff::Timestamp;
 use parse_datetime::parse_datetime;
 use pathdiff::diff_utf8_paths;
-use sqlx::{
-    Acquire as _, Row as _, SqlitePool,
-    pool::PoolConnection,
-    sqlite::{Sqlite, SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous},
-};
+use rusqlite::{Connection, params};
 use std::{
     cmp::Ordering,
     collections::HashMap,
     env,
     io::{self, Write},
-    str::FromStr as _,
 };
 use tokio::{fs, process, task::JoinHandle};
 
@@ -95,15 +90,15 @@ async fn main() -> anyhow::Result<()> {
 
     let sqlite_path = state_dir.join("state.sqlite3");
 
-    let sqlite = SqlitePool::connect_with(
-        SqliteConnectOptions::from_str(&format!("sqlite://{sqlite_path}"))?
-            .create_if_missing(true)
-            .journal_mode(SqliteJournalMode::Wal)
-            .synchronous(SqliteSynchronous::Normal),
-    )
-    .await?;
+    let mut sqlite = Connection::open(&sqlite_path)?;
+    sqlite.execute_batch(
+        "
+        pragma journal_mode = wal;
+        pragma synchronous = normal;
+        ",
+    )?;
 
-    sqlite_migrate(&sqlite).await?;
+    sqlite_migrate(&mut sqlite)?;
 
     let current_dir = Utf8PathBuf::try_from(env::current_dir()?)?;
 
@@ -123,7 +118,7 @@ async fn main() -> anyhow::Result<()> {
             // TODO: Allow recording files outside of repo? Need to exclude temporary files like
             // `*.jjdescription` and such.
             if path.starts_with(&repo) {
-                record(&sqlite, &repo, &path, &cwd, &time).await?;
+                record(&sqlite, &repo, &path, &cwd, &time)?;
             }
         }
         Command::Query {
@@ -135,9 +130,9 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let time = time.unwrap_or_else(|| Timestamp::now());
             let paths = match command {
-                QueryCommand::Frecent => frecent(&sqlite, &repo, &time, limit).await?,
-                QueryCommand::Recent => recent(&sqlite, &repo, &time, limit).await?,
-                QueryCommand::Frequent => frequent(&sqlite, &repo, &time, limit).await?,
+                QueryCommand::Frecent => frecent(&sqlite, &repo, &time, limit)?,
+                QueryCommand::Recent => recent(&sqlite, &repo, &time, limit)?,
+                QueryCommand::Frequent => frequent(&sqlite, &repo, &time, limit)?,
             };
 
             let mut handles: Vec<JoinHandle<anyhow::Result<Option<Utf8PathBuf>>>> =
@@ -179,7 +174,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    sqlite_finish(&sqlite).await?;
+    sqlite_finish(&sqlite)?;
 
     Ok(())
 }
@@ -189,23 +184,19 @@ fn parse_timestamp(input: &str) -> anyhow::Result<Timestamp> {
     Ok(zoned.timestamp())
 }
 
-async fn sqlite_migrate(sqlite: &SqlitePool) -> anyhow::Result<()> {
+fn sqlite_migrate(sqlite: &mut Connection) -> anyhow::Result<()> {
     // SQLite's 12-step generalized `alter table` procedure:
     // https://www.sqlite.org/lang_altertable.html#otheralter
 
     const LATEST_VERSION: u16 = 3;
 
-    let mut conn = sqlite.acquire().await?;
-
     loop {
-        let user_version: u16 = sqlx::query_scalar("pragma user_version")
-            .fetch_one(&mut *conn)
-            .await?;
+        let user_version: u16 = sqlite.query_row("pragma user_version", [], |row| row.get(0))?;
 
         match user_version {
-            0 => sqlite_migrate_0(&mut conn).await?,
-            1 => sqlite_migrate_1(&mut conn).await?,
-            2 => sqlite_migrate_2(&mut conn).await?,
+            0 => sqlite_migrate_0(sqlite)?,
+            1 => sqlite_migrate_1(sqlite)?,
+            2 => sqlite_migrate_2(sqlite)?,
             LATEST_VERSION => break,
             _ => anyhow::bail!(
                 "Database version {user_version} is newer than supported (max: {LATEST_VERSION})"
@@ -217,16 +208,14 @@ async fn sqlite_migrate(sqlite: &SqlitePool) -> anyhow::Result<()> {
 }
 
 // Initialize database
-async fn sqlite_migrate_0(sqlite: &mut PoolConnection<Sqlite>) -> anyhow::Result<()> {
-    let mut tx = sqlite.begin().await?;
+fn sqlite_migrate_0(sqlite: &mut Connection) -> anyhow::Result<()> {
+    let tx = sqlite.transaction()?;
 
-    let user_version: u16 = sqlx::query_scalar("pragma user_version;")
-        .fetch_one(&mut *tx)
-        .await?;
+    let user_version: u16 = tx.query_row("pragma user_version;", [], |row| row.get(0))?;
 
     assert_eq!(user_version, 0);
 
-    sqlx::query(
+    tx.execute(
         "
         create table if not exists empath (
             repo text not null,
@@ -235,30 +224,25 @@ async fn sqlite_migrate_0(sqlite: &mut PoolConnection<Sqlite>) -> anyhow::Result
             unique (repo, path, time)
         ) strict;
         ",
-    )
-    .execute(&mut *tx)
-    .await?;
+        [],
+    )?;
 
-    sqlx::query(&format!("pragma user_version = {};", user_version + 1))
-        .execute(&mut *tx)
-        .await?;
+    tx.execute(&format!("pragma user_version = {};", user_version + 1), [])?;
 
-    tx.commit().await?;
+    tx.commit()?;
 
     Ok(())
 }
 
 // Put `time` before `path` in the unique index
-async fn sqlite_migrate_1(sqlite: &mut PoolConnection<Sqlite>) -> anyhow::Result<()> {
-    let mut tx = sqlite.begin().await?;
+fn sqlite_migrate_1(sqlite: &mut Connection) -> anyhow::Result<()> {
+    let tx = sqlite.transaction()?;
 
-    let user_version: u16 = sqlx::query_scalar("pragma user_version;")
-        .fetch_one(&mut *tx)
-        .await?;
+    let user_version: u16 = tx.query_row("pragma user_version;", [], |row| row.get(0))?;
 
     assert_eq!(user_version, 1);
 
-    sqlx::query(
+    tx.execute(
         "
         create table new_empath (
             repo text not null,
@@ -267,44 +251,33 @@ async fn sqlite_migrate_1(sqlite: &mut PoolConnection<Sqlite>) -> anyhow::Result
             unique (repo, time, path)
         ) strict;
         ",
-    )
-    .execute(&mut *tx)
-    .await?;
+        [],
+    )?;
 
-    sqlx::query("insert into new_empath select * from empath;")
-        .execute(&mut *tx)
-        .await?;
+    tx.execute("insert into new_empath select * from empath;", [])?;
 
-    sqlx::query("drop table empath;").execute(&mut *tx).await?;
+    tx.execute("drop table empath;", [])?;
 
-    sqlx::query("alter table new_empath rename to empath;")
-        .execute(&mut *tx)
-        .await?;
+    tx.execute("alter table new_empath rename to empath;", [])?;
 
-    sqlx::query(&format!("pragma user_version = {};", user_version + 1))
-        .execute(&mut *tx)
-        .await?;
+    tx.execute(&format!("pragma user_version = {};", user_version + 1), [])?;
 
-    tx.commit().await?;
+    tx.commit()?;
 
     Ok(())
 }
 
 // Add `cwd` column. Default to `repo` for historical data. Also enable foreign key enforcement.
-async fn sqlite_migrate_2(sqlite: &mut PoolConnection<Sqlite>) -> anyhow::Result<()> {
-    sqlx::query("pragma foreign_keys = off;")
-        .execute(&mut **sqlite)
-        .await?;
+fn sqlite_migrate_2(sqlite: &mut Connection) -> anyhow::Result<()> {
+    sqlite.execute("pragma foreign_keys = off;", [])?;
 
-    let mut tx = sqlite.begin().await?;
+    let tx = sqlite.transaction()?;
 
-    let user_version: u16 = sqlx::query_scalar("pragma user_version;")
-        .fetch_one(&mut *tx)
-        .await?;
+    let user_version: u16 = tx.query_row("pragma user_version;", [], |row| row.get(0))?;
 
     assert_eq!(user_version, 2);
 
-    sqlx::query(
+    tx.execute(
         "
         create table new_empath (
             repo text not null,
@@ -314,11 +287,10 @@ async fn sqlite_migrate_2(sqlite: &mut PoolConnection<Sqlite>) -> anyhow::Result
             unique (repo, time, cwd, path)
         ) strict;
         ",
-    )
-    .execute(&mut *tx)
-    .await?;
+        [],
+    )?;
 
-    sqlx::query(
+    tx.execute(
         "
         insert into new_empath
         select
@@ -328,37 +300,29 @@ async fn sqlite_migrate_2(sqlite: &mut PoolConnection<Sqlite>) -> anyhow::Result
             time
         from empath;
         ",
-    )
-    .execute(&mut *tx)
-    .await?;
+        [],
+    )?;
 
-    sqlx::query("drop table empath;").execute(&mut *tx).await?;
+    tx.execute("drop table empath;", [])?;
 
-    sqlx::query("alter table new_empath rename to empath;")
-        .execute(&mut *tx)
-        .await?;
+    tx.execute("alter table new_empath rename to empath;", [])?;
 
-    sqlx::query(&format!("pragma user_version = {};", user_version + 1))
-        .execute(&mut *tx)
-        .await?;
+    tx.execute(&format!("pragma user_version = {};", user_version + 1), [])?;
 
-    tx.commit().await?;
+    tx.commit()?;
 
-    sqlx::query("pragma foreign_keys = on;")
-        .execute(&mut **sqlite)
-        .await?;
+    sqlite.execute("pragma foreign_keys = on;", [])?;
 
     Ok(())
 }
 
-async fn sqlite_finish(sqlite: &SqlitePool) -> anyhow::Result<()> {
-    sqlx::query(
+fn sqlite_finish(sqlite: &Connection) -> anyhow::Result<()> {
+    sqlite.execute(
         "
         pragma optimize;
         ",
-    )
-    .execute(sqlite)
-    .await?;
+        [],
+    )?;
 
     Ok(())
 }
@@ -395,54 +359,51 @@ async fn is_ignored(path: &Utf8Path) -> anyhow::Result<bool> {
     }
 }
 
-async fn record(
-    sqlite: &SqlitePool,
+fn record(
+    sqlite: &Connection,
     repo: &Utf8Path,
     path: &Utf8Path,
     cwd: &Utf8Path,
     time: &Timestamp,
 ) -> anyhow::Result<()> {
-    sqlx::query("insert into empath (repo, path, cwd, time) values ($1, $2, $3, $4)")
-        .bind(repo.as_str())
-        .bind(path.as_str())
-        .bind(cwd.as_str())
-        .bind(time.to_string())
-        .execute(sqlite)
-        .await?;
+    sqlite.execute(
+        "insert into empath (repo, path, cwd, time) values (?1, ?2, ?3, ?4)",
+        params![repo.as_str(), path.as_str(), cwd.as_str(), time.to_string()],
+    )?;
 
     Ok(())
 }
 
 // https://wiki.mozilla.org/User:Jesse/NewFrecency
-async fn frecent(
-    sqlite: &SqlitePool,
+fn frecent(
+    sqlite: &Connection,
     repo: &Utf8Path,
     time: &Timestamp,
     limit: u32,
 ) -> anyhow::Result<Vec<Utf8PathBuf>> {
-    let rows = sqlx::query(
+    let mut stmt = sqlite.prepare(
         "
         select
             path,
-            julianday($2) - julianday(time) as age_days
+            julianday(?2) - julianday(time) as age_days
         from empath
-        where repo = $1
-          and time <= $2
+        where repo = ?1
+          and time <= ?2
         ",
-    )
-    .bind(repo.as_str())
-    .bind(time.to_string())
-    .bind(limit)
-    .fetch_all(sqlite)
-    .await?;
+    )?;
+
+    let rows = stmt.query_map(params![repo.as_str(), time.to_string()], |row| {
+        let path: String = row.get(0)?;
+        let age_days: f64 = row.get(1)?;
+        Ok((path, age_days))
+    })?;
 
     let half_life_days = 30.0;
 
     let mut scores = HashMap::new();
 
     for row in rows {
-        let path: String = row.get("path");
-        let age_days: f64 = row.get("age_days");
+        let (path, age_days) = row?;
         let weight = 2f64.powf(-age_days / half_life_days);
         *scores.entry(path).or_insert(0.0) += weight;
     }
@@ -460,28 +421,29 @@ async fn frecent(
     Ok(paths)
 }
 
-async fn recent(
-    sqlite: &SqlitePool,
+fn recent(
+    sqlite: &Connection,
     repo: &Utf8Path,
     time: &Timestamp,
     limit: u32,
 ) -> anyhow::Result<Vec<Utf8PathBuf>> {
-    let rows: Vec<String> = sqlx::query_scalar(
+    let mut stmt = sqlite.prepare(
         "
         select path
         from empath
-        where repo = $1
-          and time <= $2
+        where repo = ?1
+          and time <= ?2
         group by path
         order by max(time) desc
-        limit $3
+        limit ?3
         ",
-    )
-    .bind(repo.as_str())
-    .bind(time.to_string())
-    .bind(limit)
-    .fetch_all(sqlite)
-    .await?;
+    )?;
+
+    let rows = stmt
+        .query_map(params![repo.as_str(), time.to_string(), limit], |row| {
+            row.get::<_, String>(0)
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
 
     let paths = rows
         .into_iter()
@@ -491,28 +453,29 @@ async fn recent(
     Ok(paths)
 }
 
-async fn frequent(
-    sqlite: &SqlitePool,
+fn frequent(
+    sqlite: &Connection,
     repo: &Utf8Path,
     time: &Timestamp,
     limit: u32,
 ) -> anyhow::Result<Vec<Utf8PathBuf>> {
-    let rows: Vec<String> = sqlx::query_scalar(
+    let mut stmt = sqlite.prepare(
         "
         select path
         from empath
-        where repo = $1
-          and time <= $2
+        where repo = ?1
+          and time <= ?2
         group by path
         order by count(*) desc
-        limit $3
+        limit ?3
         ",
-    )
-    .bind(repo.as_str())
-    .bind(time.to_string())
-    .bind(limit)
-    .fetch_all(sqlite)
-    .await?;
+    )?;
+
+    let rows = stmt
+        .query_map(params![repo.as_str(), time.to_string(), limit], |row| {
+            row.get::<_, String>(0)
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
 
     let paths = rows
         .into_iter()
