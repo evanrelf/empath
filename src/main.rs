@@ -170,6 +170,7 @@ async fn main() -> anyhow::Result<()> {
                 Vec::with_capacity(paths.len());
 
             for path in paths {
+                let repo = repo.clone();
                 let current_dir = current_dir.clone();
                 let handle = tokio::spawn(async move {
                     let exists_fut = async { Ok(fs::try_exists(&path).await.unwrap_or(false)) };
@@ -177,7 +178,7 @@ async fn main() -> anyhow::Result<()> {
                         if no_ignore {
                             Ok(false)
                         } else {
-                            is_ignored(&path).await
+                            is_ignored(&repo, &path).await
                         }
                     };
                     let (exists, ignored) = tokio::try_join!(exists_fut, ignored_fut)?;
@@ -431,8 +432,9 @@ async fn repo() -> anyhow::Result<Utf8PathBuf> {
     Ok(repo)
 }
 
-async fn is_ignored(path: &Utf8Path) -> anyhow::Result<bool> {
+async fn is_ignored(repo: &Utf8Path, path: &Utf8Path) -> anyhow::Result<bool> {
     let exit_status = process::Command::new("git")
+        .current_dir(repo)
         .arg("check-ignore")
         .arg("--quiet")
         .arg(path)
