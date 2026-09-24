@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.100"
 camino = "1.2.1"
-clap = { version = "4.5.53", features = ["derive"] }
+clap = { version = "4.5.53", features = ["derive", "env"] }
 etcetera = "0.11.0"
 jiff = "0.2.16"
 parse_datetime = "0.13.2"

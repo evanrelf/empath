@@ -20,6 +20,10 @@ struct Args {
     #[arg(long)]
     repo: Option<Utf8PathBuf>,
 
+    /// Path to database
+    #[arg(long, env = "EMPATH_DB", value_name = "PATH")]
+    db: Option<Utf8PathBuf>,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -104,17 +108,18 @@ impl ToSql for EventKind {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let xdg = Xdg::new(AppStrategyArgs {
-        top_level_domain: String::from("com"),
-        author: String::from("Evan Relf"),
-        app_name: String::from("Empath"),
-    })?;
-
-    let state_dir = Utf8PathBuf::try_from(xdg.state_dir().unwrap())?;
-
-    fs::create_dir_all(&state_dir).await?;
-
-    let sqlite_path = state_dir.join("state.sqlite3");
+    let sqlite_path = if let Some(db) = args.db {
+        db
+    } else {
+        let xdg = Xdg::new(AppStrategyArgs {
+            top_level_domain: String::from("com"),
+            author: String::from("Evan Relf"),
+            app_name: String::from("Empath"),
+        })?;
+        let state_dir = Utf8PathBuf::try_from(xdg.state_dir().unwrap())?;
+        fs::create_dir_all(&state_dir).await?;
+        state_dir.join("state.sqlite3")
+    };
 
     let mut sqlite = Connection::open(&sqlite_path)?;
     sqlite.execute_batch(
