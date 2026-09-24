@@ -4,7 +4,7 @@ use etcetera::app_strategy::{AppStrategy as _, AppStrategyArgs, Xdg};
 use jiff::Timestamp;
 use parse_datetime::parse_datetime;
 use pathdiff::diff_utf8_paths;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, ToSql, params, types::ToSqlOutput};
 use std::{
     cmp::Ordering,
     collections::HashMap,
@@ -35,6 +35,10 @@ enum Command {
         /// Record as if accessed at a different time
         #[arg(long, value_parser = parse_timestamp)]
         time: Option<Timestamp>,
+
+        /// Record a specific event
+        #[arg(long)]
+        event: Option<EventKind>,
 
         path: Utf8PathBuf,
     },
@@ -74,6 +78,28 @@ enum QueryCommand {
     Frequent,
 }
 
+#[derive(Clone, Copy, clap::ValueEnum)]
+#[value(rename_all = "snake_case")]
+enum EventKind {
+    Open,
+    Close,
+}
+
+impl EventKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            EventKind::Open => "open",
+            EventKind::Close => "close",
+        }
+    }
+}
+
+impl ToSql for EventKind {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(ToSqlOutput::from(self.as_str()))
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
@@ -108,7 +134,12 @@ async fn main() -> anyhow::Result<()> {
     };
 
     match args.command {
-        Command::Record { cwd, time, path } => {
+        Command::Record {
+            cwd,
+            time,
+            event,
+            path,
+        } => {
             let cwd = absolute_utf8(match cwd {
                 Some(cwd) => cwd,
                 None => Utf8PathBuf::try_from(env::current_dir()?)?,
@@ -118,7 +149,7 @@ async fn main() -> anyhow::Result<()> {
             // TODO: Allow recording files outside of repo? Need to exclude temporary files like
             // `*.jjdescription` and such.
             if path.starts_with(&repo) {
-                record(&sqlite, &repo, &path, &cwd, &time)?;
+                record(&sqlite, &repo, &path, &cwd, &time, event)?;
             }
         }
         Command::Query {
@@ -188,7 +219,7 @@ fn sqlite_migrate(sqlite: &mut Connection) -> anyhow::Result<()> {
     // SQLite's 12-step generalized `alter table` procedure:
     // https://www.sqlite.org/lang_altertable.html#otheralter
 
-    const LATEST_VERSION: u16 = 3;
+    const LATEST_VERSION: u16 = 4;
 
     loop {
         let user_version: u16 = sqlite.query_row("pragma user_version", [], |row| row.get(0))?;
@@ -197,6 +228,7 @@ fn sqlite_migrate(sqlite: &mut Connection) -> anyhow::Result<()> {
             0 => sqlite_migrate_0(sqlite)?,
             1 => sqlite_migrate_1(sqlite)?,
             2 => sqlite_migrate_2(sqlite)?,
+            3 => sqlite_migrate_3(sqlite)?,
             LATEST_VERSION => break,
             _ => anyhow::bail!(
                 "Database version {user_version} is newer than supported (max: {LATEST_VERSION})"
@@ -316,6 +348,62 @@ fn sqlite_migrate_2(sqlite: &mut Connection) -> anyhow::Result<()> {
     Ok(())
 }
 
+// Add nullable `event` column. Default to `null` for historical data. Also replace unique
+// constraint with a non-unique index.
+fn sqlite_migrate_3(sqlite: &mut Connection) -> anyhow::Result<()> {
+    sqlite.execute("pragma foreign_keys = off;", [])?;
+
+    let tx = sqlite.transaction()?;
+
+    let user_version: u16 = tx.query_row("pragma user_version;", [], |row| row.get(0))?;
+
+    assert_eq!(user_version, 3);
+
+    tx.execute(
+        "
+        create table new_empath (
+            repo text not null,
+            path text not null,
+            cwd text not null,
+            time text not null,
+            event text
+        ) strict;
+        ",
+        [],
+    )?;
+
+    tx.execute(
+        "
+        insert into new_empath
+        select
+            repo,
+            path,
+            cwd,
+            time,
+            null as event
+        from empath;
+        ",
+        [],
+    )?;
+
+    tx.execute("drop table empath;", [])?;
+
+    tx.execute("alter table new_empath rename to empath;", [])?;
+
+    tx.execute(
+        "create index empath_repo_time_path on empath (repo, time, path);",
+        [],
+    )?;
+
+    tx.execute(&format!("pragma user_version = {};", user_version + 1), [])?;
+
+    tx.commit()?;
+
+    sqlite.execute("pragma foreign_keys = on;", [])?;
+
+    Ok(())
+}
+
 fn sqlite_finish(sqlite: &Connection) -> anyhow::Result<()> {
     sqlite.execute(
         "
@@ -365,10 +453,17 @@ fn record(
     path: &Utf8Path,
     cwd: &Utf8Path,
     time: &Timestamp,
+    event: Option<EventKind>,
 ) -> anyhow::Result<()> {
     sqlite.execute(
-        "insert into empath (repo, path, cwd, time) values (?1, ?2, ?3, ?4)",
-        params![repo.as_str(), path.as_str(), cwd.as_str(), time.to_string()],
+        "insert into empath (repo, path, cwd, time, event) values (?1, ?2, ?3, ?4, ?5)",
+        params![
+            repo.as_str(),
+            path.as_str(),
+            cwd.as_str(),
+            time.to_string(),
+            event
+        ],
     )?;
 
     Ok(())
