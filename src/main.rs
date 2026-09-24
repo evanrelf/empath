@@ -500,7 +500,7 @@ fn frecent(
         Ok((path, age_days))
     })?;
 
-    let half_life_days = 30.0;
+    let half_life_days = 1.0;
 
     let mut scores = HashMap::new();
 
