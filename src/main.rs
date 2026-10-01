@@ -42,8 +42,12 @@ enum Command {
         time: Option<Timestamp>,
 
         /// Record a specific event
-        #[arg(long)]
+        #[arg(long, requires = "session")]
         event: Option<EventKind>,
+
+        /// Group events from the same session
+        #[arg(long)]
+        session: Option<String>,
 
         path: Utf8PathBuf,
     },
@@ -101,6 +105,7 @@ impl ToSql for EventKind {
     }
 }
 
+#[expect(clippy::too_many_lines)]
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
@@ -139,6 +144,7 @@ fn main() -> anyhow::Result<()> {
             cwd,
             time,
             event,
+            session,
             path,
         } => {
             let cwd = absolute_utf8(match cwd {
@@ -150,7 +156,15 @@ fn main() -> anyhow::Result<()> {
             // TODO: Allow recording files outside of repo? Need to exclude temporary files like
             // `*.jjdescription` and such.
             if path.starts_with(&repo) {
-                record(&sqlite, &repo, &path, &cwd, &time, event)?;
+                record(
+                    &sqlite,
+                    &repo,
+                    &path,
+                    &cwd,
+                    &time,
+                    event,
+                    session.as_deref(),
+                )?;
             }
         }
         Command::Query {
@@ -224,7 +238,7 @@ fn sqlite_migrate(sqlite: &mut Connection) -> anyhow::Result<()> {
     // SQLite's 12-step generalized `alter table` procedure:
     // https://www.sqlite.org/lang_altertable.html#otheralter
 
-    const LATEST_VERSION: u16 = 4;
+    const LATEST_VERSION: u16 = 5;
 
     loop {
         let user_version: u16 = sqlite.query_row("pragma user_version", [], |row| row.get(0))?;
@@ -234,6 +248,7 @@ fn sqlite_migrate(sqlite: &mut Connection) -> anyhow::Result<()> {
             1 => sqlite_migrate_1(sqlite)?,
             2 => sqlite_migrate_2(sqlite)?,
             3 => sqlite_migrate_3(sqlite)?,
+            4 => sqlite_migrate_4(sqlite)?,
             LATEST_VERSION => break,
             _ => anyhow::bail!(
                 "Database version {user_version} is newer than supported (max: {LATEST_VERSION})"
@@ -409,6 +424,23 @@ fn sqlite_migrate_3(sqlite: &mut Connection) -> anyhow::Result<()> {
     Ok(())
 }
 
+// Add nullable `session` column. Default to `null` for historical data.
+fn sqlite_migrate_4(sqlite: &mut Connection) -> anyhow::Result<()> {
+    let tx = sqlite.transaction()?;
+
+    let user_version: u16 = tx.query_row("pragma user_version;", [], |row| row.get(0))?;
+
+    assert_eq!(user_version, 4);
+
+    tx.execute("alter table empath add column session text;", [])?;
+
+    tx.execute(&format!("pragma user_version = {};", user_version + 1), [])?;
+
+    tx.commit()?;
+
+    Ok(())
+}
+
 fn sqlite_finish(sqlite: &Connection) -> anyhow::Result<()> {
     sqlite.execute(
         "
@@ -519,15 +551,20 @@ fn record(
     cwd: &Utf8Path,
     time: &Timestamp,
     event: Option<EventKind>,
+    session: Option<&str>,
 ) -> anyhow::Result<()> {
     sqlite.execute(
-        "insert into empath (repo, path, cwd, time, event) values (?1, ?2, ?3, ?4, ?5)",
+        "
+        insert into empath (repo, path, cwd, time, event, session)
+        values (?1, ?2, ?3, ?4, ?5, ?6)
+        ",
         params![
             repo.as_str(),
             path.as_str(),
             cwd.as_str(),
             time.to_string(),
-            event
+            event,
+            session
         ],
     )?;
 
