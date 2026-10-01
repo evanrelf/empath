@@ -7,11 +7,12 @@ use pathdiff::diff_utf8_paths;
 use rusqlite::{Connection, ToSql, params, types::ToSqlOutput};
 use std::{
     cmp::Ordering,
-    collections::HashMap,
-    env,
-    io::{self, Write},
+    collections::{HashMap, HashSet},
+    env, fs,
+    io::{self, Read as _, Write},
+    process::{self, Stdio},
+    thread,
 };
-use tokio::{fs, process, task::JoinHandle};
 
 #[derive(clap::Parser)]
 #[command(disable_help_subcommand = true)]
@@ -61,10 +62,6 @@ enum Command {
         #[arg(long, value_parser = parse_timestamp)]
         time: Option<Timestamp>,
 
-        /// Print top n paths
-        #[arg(long, default_value_t = 100)]
-        limit: u32,
-
         #[command(subcommand)]
         command: QueryCommand,
     },
@@ -104,8 +101,7 @@ impl ToSql for EventKind {
     }
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     let sqlite_path = if let Some(db) = args.db {
@@ -117,7 +113,7 @@ async fn main() -> anyhow::Result<()> {
             app_name: String::from("Empath"),
         })?;
         let state_dir = Utf8PathBuf::try_from(xdg.state_dir().unwrap())?;
-        fs::create_dir_all(&state_dir).await?;
+        fs::create_dir_all(&state_dir)?;
         state_dir.join("state.sqlite3")
     };
 
@@ -135,7 +131,7 @@ async fn main() -> anyhow::Result<()> {
 
     let repo = match args.repo {
         Some(repo) => repo,
-        None => repo().await?,
+        None => repo()?,
     };
 
     match args.command {
@@ -161,51 +157,54 @@ async fn main() -> anyhow::Result<()> {
             absolute,
             no_ignore,
             time,
-            limit,
             command,
         } => {
             let time = time.unwrap_or_else(|| Timestamp::now());
-            let paths = match command {
-                QueryCommand::Frecent => frecent(&sqlite, &repo, &time, limit)?,
-                QueryCommand::Recent => recent(&sqlite, &repo, &time, limit)?,
-                QueryCommand::Frequent => frequent(&sqlite, &repo, &time, limit)?,
+
+            // Querying Git is the bottleneck, so we spawn it as early as possible
+            let tracked_child = if no_ignore {
+                None
+            } else {
+                Some(tracked_spawn(&repo)?)
             };
 
-            let mut handles: Vec<JoinHandle<anyhow::Result<Option<Utf8PathBuf>>>> =
-                Vec::with_capacity(paths.len());
+            let paths = match command {
+                QueryCommand::Frecent => frecent(&sqlite, &repo, &time)?,
+                QueryCommand::Recent => recent(&sqlite, &repo, &time)?,
+                QueryCommand::Frequent => frequent(&sqlite, &repo, &time)?,
+            };
+
+            let paths = paths
+                .into_iter()
+                .filter(|path| path.exists())
+                .collect::<Vec<_>>();
+
+            // Tracked files are never ignored, so only untracked files need checking
+            let ignored = if let Some(tracked_child) = tracked_child {
+                let tracked = tracked_wait(&repo, tracked_child)?;
+                let untracked = paths
+                    .iter()
+                    .filter(|path| !tracked.contains(*path))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                ignored(&repo, &untracked)?
+            } else {
+                HashSet::new()
+            };
+
+            let mut stdout = io::stdout().lock();
 
             for path in paths {
-                let repo = repo.clone();
-                let current_dir = current_dir.clone();
-                let handle = tokio::spawn(async move {
-                    let exists_fut = async { Ok(fs::try_exists(&path).await.unwrap_or(false)) };
-                    let ignored_fut = async {
-                        if no_ignore {
-                            Ok(false)
-                        } else {
-                            is_ignored(&repo, &path).await
-                        }
-                    };
-                    let (exists, ignored) = tokio::try_join!(exists_fut, ignored_fut)?;
-                    if !exists || ignored {
-                        return Ok(None);
-                    }
-                    let path = if absolute {
-                        path
-                    } else {
-                        diff_utf8_paths(path, &current_dir).unwrap()
-                    };
-                    Ok(Some(path))
-                });
-                handles.push(handle);
-            }
-
-            #[expect(clippy::collapsible_if)]
-            for handle in handles {
-                if let Some(path) = handle.await?? {
-                    if writeln!(io::stdout(), "{path}").is_err() {
-                        break;
-                    }
+                if ignored.contains(&path) {
+                    continue;
+                }
+                let path = if absolute {
+                    path
+                } else {
+                    diff_utf8_paths(path, &current_dir).unwrap()
+                };
+                if writeln!(stdout, "{path}").is_err() {
+                    break;
                 }
             }
         }
@@ -421,12 +420,11 @@ fn sqlite_finish(sqlite: &Connection) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn repo() -> anyhow::Result<Utf8PathBuf> {
+fn repo() -> anyhow::Result<Utf8PathBuf> {
     let output = process::Command::new("git")
         .arg("rev-parse")
         .arg("--show-toplevel")
-        .output()
-        .await?;
+        .output()?;
 
     if !output.status.success() {
         anyhow::bail!("Failed to get Git repo");
@@ -437,21 +435,81 @@ async fn repo() -> anyhow::Result<Utf8PathBuf> {
     Ok(repo)
 }
 
-async fn is_ignored(repo: &Utf8Path, path: &Utf8Path) -> anyhow::Result<bool> {
-    let exit_status = process::Command::new("git")
+fn tracked_spawn(repo: &Utf8Path) -> anyhow::Result<process::Child> {
+    let child = process::Command::new("git")
+        .arg("ls-files")
+        .arg("--cached")
+        .arg("-z")
+        .stdout(Stdio::piped())
         .current_dir(repo)
+        .spawn()?;
+
+    Ok(child)
+}
+
+fn tracked_wait(repo: &Utf8Path, child: process::Child) -> anyhow::Result<HashSet<Utf8PathBuf>> {
+    let output = child.wait_with_output()?;
+
+    if !output.status.success() {
+        anyhow::bail!("`git ls-files` failed");
+    }
+
+    let tracked = str::from_utf8(&output.stdout)?
+        .split_terminator('\0')
+        .map(|path| repo.join(path))
+        .collect();
+
+    Ok(tracked)
+}
+
+fn ignored(repo: &Utf8Path, paths: &[Utf8PathBuf]) -> anyhow::Result<HashSet<Utf8PathBuf>> {
+    if paths.is_empty() {
+        return Ok(HashSet::new());
+    }
+
+    let mut child = process::Command::new("git")
         .arg("check-ignore")
-        .arg("--quiet")
-        .arg(path)
-        .status()
-        .await?;
+        .arg("--stdin")
+        .arg("-z")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .current_dir(repo)
+        .spawn()?;
+
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+
+    let (write_result, read_result) = thread::scope(|scope| {
+        let writer = scope.spawn(move || -> io::Result<()> {
+            for path in paths {
+                stdin.write_all(path.as_str().as_bytes())?;
+                stdin.write_all(b"\0")?;
+            }
+            Ok(())
+        });
+        let mut output = Vec::new();
+        let read_result = stdout.read_to_end(&mut output).map(|_| output);
+        drop(stdout);
+        (writer.join().unwrap(), read_result)
+    });
+
+    let exit_status = child.wait()?;
 
     match exit_status.code() {
-        Some(0) => Ok(true),
-        Some(1) => Ok(false),
+        Some(0 | 1) => {}
         Some(128) => anyhow::bail!("`git check-ignore` encountered a fatal error"),
         code => anyhow::bail!("`git check-ignore` returned unexpected exit code: {code:?}"),
     }
+
+    write_result?;
+    let output = read_result?;
+
+    let ignored = str::from_utf8(&output)?
+        .split_terminator('\0')
+        .map(Utf8PathBuf::from)
+        .collect();
+
+    Ok(ignored)
 }
 
 fn record(
@@ -481,7 +539,6 @@ fn frecent(
     sqlite: &Connection,
     repo: &Utf8Path,
     time: &Timestamp,
-    limit: u32,
 ) -> anyhow::Result<Vec<Utf8PathBuf>> {
     let mut stmt = sqlite.prepare(
         "
@@ -516,7 +573,6 @@ fn frecent(
 
     let paths = items
         .into_iter()
-        .take(usize::try_from(limit).expect("Machine has 64-bit pointers"))
         .map(|(path, _)| Utf8PathBuf::from(path))
         .collect();
 
@@ -527,7 +583,6 @@ fn recent(
     sqlite: &Connection,
     repo: &Utf8Path,
     time: &Timestamp,
-    limit: u32,
 ) -> anyhow::Result<Vec<Utf8PathBuf>> {
     let mut stmt = sqlite.prepare(
         "
@@ -537,12 +592,11 @@ fn recent(
           and time <= ?2
         group by path
         order by max(time) desc
-        limit ?3
         ",
     )?;
 
     let rows = stmt
-        .query_map(params![repo.as_str(), time.to_string(), limit], |row| {
+        .query_map(params![repo.as_str(), time.to_string()], |row| {
             row.get::<_, String>(0)
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -559,7 +613,6 @@ fn frequent(
     sqlite: &Connection,
     repo: &Utf8Path,
     time: &Timestamp,
-    limit: u32,
 ) -> anyhow::Result<Vec<Utf8PathBuf>> {
     let mut stmt = sqlite.prepare(
         "
@@ -569,12 +622,11 @@ fn frequent(
           and time <= ?2
         group by path
         order by count(*) desc
-        limit ?3
         ",
     )?;
 
     let rows = stmt
-        .query_map(params![repo.as_str(), time.to_string(), limit], |row| {
+        .query_map(params![repo.as_str(), time.to_string()], |row| {
             row.get::<_, String>(0)
         })?
         .collect::<Result<Vec<_>, _>>()?;
