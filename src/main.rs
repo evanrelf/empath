@@ -605,6 +605,7 @@ fn frecent(
         from empath
         where repo = ?1
           and time <= ?2
+          and (event is null or event = 'open')
         ",
     )?;
 
@@ -677,6 +678,7 @@ fn frequent(
         from empath
         where repo = ?1
           and time <= ?2
+          and (event is null or event = 'open')
         group by path
         order by count(*) desc
         ",
