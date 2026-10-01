@@ -32,43 +32,49 @@ struct Args {
 #[derive(clap::Subcommand)]
 enum Command {
     /// Record path access
-    Record {
-        /// Record as if accessed from a different working directory
-        #[arg(long, value_name = "PATH")]
-        cwd: Option<Utf8PathBuf>,
-
-        /// Record as if accessed at a different time
-        #[arg(long, value_parser = parse_timestamp)]
-        time: Option<Timestamp>,
-
-        /// Record a specific event
-        #[arg(long, requires = "session")]
-        event: Option<EventKind>,
-
-        /// Group events from the same session
-        #[arg(long)]
-        session: Option<String>,
-
-        path: Utf8PathBuf,
-    },
+    Record(RecordArgs),
 
     /// Query recorded paths
-    Query {
-        /// Print absolute paths
-        #[arg(long)]
-        absolute: bool,
+    Query(QueryArgs),
+}
 
-        /// Include ignored paths
-        #[arg(long)]
-        no_ignore: bool,
+#[derive(clap::Args)]
+struct RecordArgs {
+    /// Record as if accessed from a different working directory
+    #[arg(long, value_name = "PATH")]
+    cwd: Option<Utf8PathBuf>,
 
-        /// Query at a different time
-        #[arg(long, value_parser = parse_timestamp)]
-        time: Option<Timestamp>,
+    /// Record as if accessed at a different time
+    #[arg(long, value_parser = parse_timestamp)]
+    time: Option<Timestamp>,
 
-        #[command(subcommand)]
-        command: QueryCommand,
-    },
+    /// Record a specific event
+    #[arg(long, requires = "session")]
+    event: Option<EventKind>,
+
+    /// Group events from the same session
+    #[arg(long)]
+    session: Option<String>,
+
+    path: Utf8PathBuf,
+}
+
+#[derive(clap::Args)]
+struct QueryArgs {
+    /// Print absolute paths
+    #[arg(long)]
+    absolute: bool,
+
+    /// Include ignored paths
+    #[arg(long)]
+    no_ignore: bool,
+
+    /// Query at a different time
+    #[arg(long, value_parser = parse_timestamp)]
+    time: Option<Timestamp>,
+
+    #[command(subcommand)]
+    command: QueryCommand,
 }
 
 #[derive(clap::Subcommand)]
@@ -105,24 +111,137 @@ impl ToSql for EventKind {
     }
 }
 
-#[expect(clippy::too_many_lines)]
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let sqlite_path = if let Some(db) = args.db {
-        db
-    } else {
-        let xdg = Xdg::new(AppStrategyArgs {
-            top_level_domain: String::from("com"),
-            author: String::from("Evan Relf"),
-            app_name: String::from("Empath"),
-        })?;
-        let state_dir = Utf8PathBuf::try_from(xdg.state_dir().unwrap())?;
-        fs::create_dir_all(&state_dir)?;
-        state_dir.join("state.sqlite3")
+    let db_path = match args.db {
+        Some(db_path) => db_path,
+        None => db_path()?,
     };
 
-    let mut sqlite = Connection::open(&sqlite_path)?;
+    let sqlite = sqlite_open(&db_path)?;
+
+    let repo = match args.repo {
+        Some(repo) => repo,
+        None => repo()?,
+    };
+
+    match args.command {
+        Command::Record(args) => run_record(&sqlite, &repo, args)?,
+        Command::Query(args) => run_query(&sqlite, &repo, args)?,
+    }
+
+    sqlite_finish(&sqlite)?;
+
+    Ok(())
+}
+
+fn run_record(sqlite: &Connection, repo: &Utf8Path, args: RecordArgs) -> anyhow::Result<()> {
+    let RecordArgs {
+        cwd,
+        time,
+        event,
+        session,
+        path,
+    } = args;
+
+    let cwd = absolute_utf8(match cwd {
+        Some(cwd) => cwd,
+        None => Utf8PathBuf::try_from(env::current_dir()?)?,
+    })?;
+    let time = time.unwrap_or_else(|| Timestamp::now());
+    let path = absolute_utf8(path)?;
+
+    // TODO: Allow recording files outside of repo? Need to exclude temporary files like
+    // `*.jjdescription` and such.
+    if path.starts_with(repo) {
+        record(sqlite, repo, &path, &cwd, &time, event, session.as_deref())?;
+    }
+
+    Ok(())
+}
+
+fn run_query(sqlite: &Connection, repo: &Utf8Path, args: QueryArgs) -> anyhow::Result<()> {
+    let QueryArgs {
+        absolute,
+        no_ignore,
+        time,
+        command,
+    } = args;
+
+    let time = time.unwrap_or_else(|| Timestamp::now());
+
+    // Querying Git is the bottleneck, so we spawn it as early as possible
+    let tracked_child = if no_ignore {
+        None
+    } else {
+        Some(tracked_spawn(repo)?)
+    };
+
+    let paths = match command {
+        QueryCommand::Frecent => frecent(sqlite, repo, &time)?,
+        QueryCommand::Recent => recent(sqlite, repo, &time)?,
+        QueryCommand::Frequent => frequent(sqlite, repo, &time)?,
+    };
+
+    let paths = paths
+        .into_iter()
+        .filter(|path| path.exists())
+        .collect::<Vec<_>>();
+
+    // Tracked files are never ignored, so only untracked files need checking
+    let ignored = if let Some(tracked_child) = tracked_child {
+        let tracked = tracked_wait(repo, tracked_child)?;
+        let untracked = paths
+            .iter()
+            .filter(|path| !tracked.contains(*path))
+            .cloned()
+            .collect::<Vec<_>>();
+        ignored(repo, &untracked)?
+    } else {
+        HashSet::new()
+    };
+
+    let current_dir = Utf8PathBuf::try_from(env::current_dir()?)?;
+
+    let mut stdout = io::stdout().lock();
+
+    for path in paths {
+        if ignored.contains(&path) {
+            continue;
+        }
+        let path = if absolute {
+            path
+        } else {
+            diff_utf8_paths(path, &current_dir).unwrap()
+        };
+        if writeln!(stdout, "{path}").is_err() {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+fn db_path() -> anyhow::Result<Utf8PathBuf> {
+    let xdg = Xdg::new(AppStrategyArgs {
+        top_level_domain: String::from("com"),
+        author: String::from("Evan Relf"),
+        app_name: String::from("Empath"),
+    })?;
+    let state_dir = Utf8PathBuf::try_from(xdg.state_dir().unwrap())?;
+    fs::create_dir_all(&state_dir)?;
+    Ok(state_dir.join("state.sqlite3"))
+}
+
+fn parse_timestamp(input: &str) -> anyhow::Result<Timestamp> {
+    let zoned = parse_datetime(input)?;
+    Ok(zoned.timestamp())
+}
+
+fn sqlite_open(path: &Utf8Path) -> anyhow::Result<Connection> {
+    let mut sqlite = Connection::open(path)?;
+
     sqlite.execute_batch(
         "
         pragma journal_mode = wal;
@@ -132,106 +251,7 @@ fn main() -> anyhow::Result<()> {
 
     sqlite_migrate(&mut sqlite)?;
 
-    let current_dir = Utf8PathBuf::try_from(env::current_dir()?)?;
-
-    let repo = match args.repo {
-        Some(repo) => repo,
-        None => repo()?,
-    };
-
-    match args.command {
-        Command::Record {
-            cwd,
-            time,
-            event,
-            session,
-            path,
-        } => {
-            let cwd = absolute_utf8(match cwd {
-                Some(cwd) => cwd,
-                None => Utf8PathBuf::try_from(env::current_dir()?)?,
-            })?;
-            let time = time.unwrap_or_else(|| Timestamp::now());
-            let path = absolute_utf8(path)?;
-            // TODO: Allow recording files outside of repo? Need to exclude temporary files like
-            // `*.jjdescription` and such.
-            if path.starts_with(&repo) {
-                record(
-                    &sqlite,
-                    &repo,
-                    &path,
-                    &cwd,
-                    &time,
-                    event,
-                    session.as_deref(),
-                )?;
-            }
-        }
-        Command::Query {
-            absolute,
-            no_ignore,
-            time,
-            command,
-        } => {
-            let time = time.unwrap_or_else(|| Timestamp::now());
-
-            // Querying Git is the bottleneck, so we spawn it as early as possible
-            let tracked_child = if no_ignore {
-                None
-            } else {
-                Some(tracked_spawn(&repo)?)
-            };
-
-            let paths = match command {
-                QueryCommand::Frecent => frecent(&sqlite, &repo, &time)?,
-                QueryCommand::Recent => recent(&sqlite, &repo, &time)?,
-                QueryCommand::Frequent => frequent(&sqlite, &repo, &time)?,
-            };
-
-            let paths = paths
-                .into_iter()
-                .filter(|path| path.exists())
-                .collect::<Vec<_>>();
-
-            // Tracked files are never ignored, so only untracked files need checking
-            let ignored = if let Some(tracked_child) = tracked_child {
-                let tracked = tracked_wait(&repo, tracked_child)?;
-                let untracked = paths
-                    .iter()
-                    .filter(|path| !tracked.contains(*path))
-                    .cloned()
-                    .collect::<Vec<_>>();
-                ignored(&repo, &untracked)?
-            } else {
-                HashSet::new()
-            };
-
-            let mut stdout = io::stdout().lock();
-
-            for path in paths {
-                if ignored.contains(&path) {
-                    continue;
-                }
-                let path = if absolute {
-                    path
-                } else {
-                    diff_utf8_paths(path, &current_dir).unwrap()
-                };
-                if writeln!(stdout, "{path}").is_err() {
-                    break;
-                }
-            }
-        }
-    }
-
-    sqlite_finish(&sqlite)?;
-
-    Ok(())
-}
-
-fn parse_timestamp(input: &str) -> anyhow::Result<Timestamp> {
-    let zoned = parse_datetime(input)?;
-    Ok(zoned.timestamp())
+    Ok(sqlite)
 }
 
 fn sqlite_migrate(sqlite: &mut Connection) -> anyhow::Result<()> {
